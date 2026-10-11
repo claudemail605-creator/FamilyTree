@@ -21,10 +21,12 @@
     return ((w[0] || '?')[0] + (w[1] ? w[1][0] : '')).toUpperCase();
   }
 
-  // Wait for the Supabase UMD to be available.
+  // The Supabase JS v2 UMD build (dist/umd/supabase.min.js) exposes
+  //   window.supabase = { createClient, ... }
+  // so the client factory is window.supabase.createClient(url, key).
   function getSupabase() {
-    if (typeof window.supabase === 'function') return window.supabase;
-    throw new Error('Supabase JS UMD did not load (window.supabase missing). Check the CDN script in index.html.');
+    if (window.supabase && typeof window.supabase.createClient === 'function') return window.supabase;
+    throw new Error('Supabase JS UMD did not load (window.supabase missing or createClient absent). Check the CDN script in index.html.');
   }
 
   function buildClient() {
@@ -32,7 +34,7 @@
     if (!cfg || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
       throw new Error('js/config.js must define window.APP_CONFIG = { SUPABASE_URL, SUPABASE_ANON_KEY }.');
     }
-    return getSupabase()(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+    return window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
   }
 
   const Auth = {
@@ -59,15 +61,30 @@
       }
       this.initializing = true;
       this._render();
-      this.client.auth.getSession().then(s => {
-        this.session = s.data.session;
+      // getSession() can hang on some Supabase projects when there is no session
+      // cookie (the /auth/v1/session endpoint returns 404 text/plain which the client
+      // may not handle well). Guard it with a timeout so the page never stays stuck.
+      const getSessionDone = (s) => {
+        if (this._getSessionTimer) { clearTimeout(this._getSessionTimer); this._getSessionTimer = null; }
+        this.initializing = false;
+        this.session = s?.data?.session || null;
         this._sessionFresh = false;
         this._afterSession();
-      }).catch(e => {
-        console.warn('getSession error:', e);
-        this.session = null;
-        this._afterSession();
-      });
+      };
+      this.client.auth.getSession()
+        .then(s => getSessionDone(s))
+        .catch(e => { console.warn('getSession error:', e); getSessionDone(null); });
+      // Fallback: if getSession() has not settled within 6s, treat it as "no session"
+      // and move on so the page is never stuck in a loading spinner.
+      this._getSessionTimer = setTimeout(() => {
+        if (this.session === undefined) {
+          console.warn('getSession() did not settle within 6s — assuming no session.');
+          this.session = null;
+          this._sessionFresh = false;
+          this.initializing = false;
+          this._afterSession();
+        }
+      }, 6000);
       this.client.auth.onAuthStateChange((ev, sess) => {
         this.session = sess;
         this._sessionFresh = false;
@@ -77,6 +94,10 @@
       this.loaded = true;
       if (cb) cb(this);
     },
+
+    // clear the getSession fallback timer when the session settles (so we don't
+    // double-resolve). Called implicitly via the timer's own check.
+    _getSessionTimer: null,
 
     // refresh profile + branch access whenever we have a session but stale data
     _afterSession() {
