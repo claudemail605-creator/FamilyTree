@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>        <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-i18n>brand.title</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-btn only-mobile" id="btnFilters" data-i18n-attr="aria-label">☰</button>
+    <div class="brand">
+      <span class="brand-mark">⌂</span>
+      <div>
+        <h1 data-i18n>brand.title</h1>
+        <p id="subtitle">Loading…</p>
+      </div>
+    </div>
+
+    <div class="search">
+      <span class="search-ico">⌕</span>
+      <input id="search" type="search" data-i18n-placeholder="search.placeholder" placeholder="Search name, nickname, spouse, place…" autocomplete="off">
+    </div>
+
+    <div class="seg" id="viewSwitch" role="tablist">
+      <button class="on" data-view="tree" role="tab" data-i18n>view.tree</button>
+      <button data-view="table" role="tab" data-i18n>view.table</button>
+    </div>
+
+    <label class="btn ghost" title="Load a different .xlsx file" data-i18n-attr="title">
+      <span data-i18n>btnOpenExcel</span>
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+    </label>
+    <div class="auth" id="authArea"></div>
+    <button class="icon-btn" id="btnAdmin" data-i18n data-i18n-attr="aria-label" title="Admin panel" hidden>⚙</button>
+    <div class="lang" id="langArea">
+      <button class="icon-btn" id="btnLang" data-i18n-attr="aria-label" title="Change language">🌐</button>
+    </div>
+    <button class="icon-btn" id="btnTheme" data-i18n-attr="aria-label" title="Toggle dark mode">☾</button>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="side-head">
+        <h2 data-i18n>sidebar.filters</h2>
+        <button class="link" id="btnReset" data-i18n>btnReset</button>
+      </div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="field">
+        <label data-i18n>label.generation</label>
+        <div class="chips" id="genChips"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n>label.gender</label>
+        <div class="chips" id="genderChips"></div>
+      </div>
+
+      <div class="field">
+        <label for="fStatus" data-i18n>label.status</label>
+        <select id="fStatus">
+          <option value="" data-i18n>status.everyone</option>
+          <option value="living" data-i18n>status.living</option>
+          <option value="deceased" data-i18n>status.deceased</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="fBranch" data-i18n>label.branch</label>
+        <select id="fBranch"></select>
+      </div>
+
+      <div class="field">
+        <label for="fPob" data-i18n>label.pob</label>
+        <select id="fPob"></select>
+      </div>
+
+      <div class="field">
+        <label for="fQual" data-i18n>label.qual</label>
+        <select id="fQual"></select>
+      </div>
+
+      <div class="field">
+        <label for="fHas" data-i18n>label.has</label>
+        <select id="fHas">
+          <option value="" data-i18n>has.anything</option>
+          <option value="dob" data-i18n>has.dob</option>
+          <option value="spouse" data-i18n>has.spouse</option>
+          <option value="children" data-i18n>has.children</option>
+          <option value="nochildren" data-i18n>has.nochildren</option>
+        </select>
+      </div>
+
+      <div class="result-count" id="resultCount"></div>
+    </aside>
+
+    <main class="main">
+      <section id="treeView" class="stage" aria-label="Family tree">
+        <div id="world" class="world"></div>
+        <div class="stage-ctrls">
+          <button class="icon-btn" id="zoomIn" title="Zoom in">+</button>
+          <button class="icon-btn" id="zoomOut" title="Zoom out">−</button>
+          <button class="icon-btn" id="zoomFit" title="Fit to screen">⤢</button>
+          <button class="icon-btn" id="expandAll" title="Expand all">⊞</button>
+          <button class="icon-btn" id="collapseAll" title="Collapse all">⊟</button>
+        </div>
+        <div class="legend">
+          <span><i class="dot male"></i> <span data-i18n>legend.male</span></span>
+          <span><i class="dot female"></i> <span data-i18n>legend.female</span></span>
+          <span><b>†</b> <span data-i18n>legend.deceased</span></span>
+          <span class="hint" data-i18n>legend.hint</span>
+        </div>
+        <div class="empty" id="emptyMsg" hidden data-i18n>empty.msg</div>
+      </section>
+
+      <section id="tableView" class="table-wrap" hidden>
+        <table id="table"></table>
+      </section>
+    </main>
+
+    <aside class="panel" id="panel" aria-live="polite" hidden></aside>
+  </div>
+
+  <div class="tooltip" id="tooltip" hidden></div>
+  <div class="toast" id="toast" hidden></div>
+
+  <!-- Supabase (pinned 2.x UMD). Used only when a user signs in. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.min.js"></script>
+  <!-- Excel reader (loaded from a CDN; if offline the embedded data in js/data.js is used) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
