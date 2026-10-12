@@ -197,10 +197,16 @@ button, input, select { font: inherit; color: inherit; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 10px var(--accent-soft); } }
 
 .avatar {
+  position: relative; overflow: hidden;
   flex: none; width: 32px; height: 32px; border-radius: 50%;
   display: grid; place-items: center; font-weight: 700; font-size: 13px;
   background: var(--unknown-soft); color: var(--unknown);
 }
+/* Phase 2: the card photo covers the initials once it has loaded. */
+.node-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+/* Phase 2: soft-deleted people (visible to admins only) are dimmed and dashed. */
+.node.deleted { opacity: .55; border-style: dashed; }
+.node.deleted .avatar { filter: grayscale(.6); }
 .male .avatar { background: var(--male-soft); color: var(--male); }
 .female .avatar { background: var(--female-soft); color: var(--female); }
 .meta { min-width: 0; }
@@ -225,6 +231,14 @@ button, input, select { font: inherit; color: inherit; }
 }
 .legend .hint { opacity: .8; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; background: var(--unknown); }
+/* Phase 2: refresh feedback + the sidebar "show deleted" checkbox. */
+#btnRefresh.spin { animation: spin .8s linear infinite; }
+#btnExport { font-size: 12px; white-space: nowrap; }
+.check-row {
+  display: flex; align-items: center; gap: 8px; padding: 3px 0;
+  font-size: 12.5px; color: var(--ink-2); cursor: pointer;
+}
+.check-row input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; flex: none; }
 .dot.male { background: var(--male); }
 .dot.female { background: var(--female); }
 .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-2); font-size: 16px; pointer-events: none; }
@@ -293,6 +307,35 @@ button, input, select { font: inherit; color: inherit; }
 .edit-input[aria-invalid="true"] { border-color: #c0392b; }
 textarea.edit-input { resize: vertical; min-height: 60px; }
 
+/* ---------- Photos ---------- */
+.p-avatar { position: relative; overflow: hidden; }
+.p-avatar-img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; border-radius: 50%; display: block;
+}
+.photo-wrap { display: flex; flex-direction: column; gap: 10px; padding-bottom: 8px; }
+.photo-frame {
+  display: grid; place-items: center; width: 100%; padding: 0; min-height: 120px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+  overflow: hidden; font: inherit; color: inherit;
+}
+button.photo-frame { cursor: zoom-in; }
+button.photo-frame:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.photo-img { display: block; width: 100%; max-height: 340px; object-fit: contain; }
+.photo-empty { color: var(--ink-2); font-size: 12.5px; font-style: italic; padding: 28px 12px; text-align: center; }
+.photo-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.photo-actions .btn { flex: 1 1 auto; min-width: 110px; }
+
+.lightbox {
+  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 32px;
+  background: rgba(8, 12, 14, .82);
+}
+.lightbox img {
+  max-width: min(92vw, 900px); max-height: 88vh; border-radius: 12px;
+  box-shadow: var(--shadow-lg); background: var(--surface);
+}
+.lightbox-close { position: absolute; top: 16px; right: 16px; background: var(--surface); }
+
 /* ---------- Audit log ---------- */
 .audit-row { padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; background: var(--surface-2); }
 .audit-meta { font-size: 12px; margin-bottom: 6px; }
@@ -360,6 +403,50 @@ td.dash { color: var(--ink-2); opacity: .5; }
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 60;
   background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 999px; box-shadow: var(--shadow-lg);
 }
+
+/* ---------- Auth gate (Phase 1) ---------- */
+/* Nothing but the gate is usable until an active user is signed in. */
+body.gated .layout { display: none; }
+body.gated .topbar .search,
+body.gated .topbar .seg { display: none; }
+
+.auth-gate { min-height: calc(100vh - 78px); padding: 30px 20px; }
+.auth-gate:not([hidden]) { display: grid; place-items: center; }
+.gate-card {
+  width: 100%; max-width: 420px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: var(--shadow-lg); padding: 26px 24px 22px;
+}
+.gate-card.gate-center { text-align: center; }
+.gate-center .auth-spinner { margin: 0 auto; }
+.gate-title { margin: 0 0 8px; font-size: 20px; line-height: 1.25; }
+.gate-sub { margin: 0 0 18px; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.gate-card .edit-label { margin-top: 14px; }
+.gate-notice {
+  margin: 0 0 16px; padding: 10px 12px; border-radius: 10px;
+  background: var(--female-soft); color: var(--female);
+  font-size: 12.5px; line-height: 1.45; font-weight: 600;
+}
+.gate-msg { margin: 12px 0 0; font-size: 12.5px; line-height: 1.4; min-height: 16px; }
+.gate-msg.error { color: #c0392b; }
+.gate-msg.ok { color: var(--accent); font-weight: 600; }
+.gate-hint { margin: 6px 0 0; font-size: 12px; color: var(--ink-2); }
+.gate-go {
+  width: 100%; margin-top: 18px; padding: 10px 12px; font-size: 14px;
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+.gate-go:hover { background: var(--accent); border-color: var(--accent); }
+.gate-go[disabled] { opacity: .65; cursor: default; }
+.gate-link { display: inline-block; margin-top: 14px; font-size: 12.5px; }
+.pw-field { position: relative; }
+.pw-field .edit-input { padding-right: 64px; }
+.pw-toggle {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  border: 0; background: none; color: var(--accent); font: inherit;
+  font-size: 12px; font-weight: 600; cursor: pointer; padding: 5px 7px; border-radius: 7px;
+}
+.pw-toggle:hover { background: var(--accent-soft); }
+.pw-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 900px) {

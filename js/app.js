@@ -51,6 +51,7 @@
     collapsed: new Set(),
     f: { q: '', gens: new Set(), genders: new Set(), status: '', branch: '', pob: '', qual: '', has: '' },
     view: 'tree', selected: null, sourceLabel: '',
+    showDeleted: false, _allRows: [],
     sort: { key: 'gen', dir: 1 },
     scale: 1, tx: 0, ty: 0, bbox: { w: 0, h: 0 }, pos: new Map(),
     editing: false, editForm: null, auditRows: []
@@ -80,7 +81,9 @@
 
   function rowsFromWorkbook(wb) {
     const ws = wb.Sheets[SHEET_NAME] || wb.Sheets[wb.SheetNames[0]];
-    return XLSX.utils.sheet_to_json(wb, { defval: null, raw: true, cellDates: true });
+    // NOTE: pass the WORKSHEET (ws) — handing the whole workbook to sheet_to_json
+    // silently returns no rows.
+    return XLSX.utils.sheet_to_json(ws, { defval: null, raw: true, cellDates: true });
   }
 
   function rowsFromEmbedded() { return window.FAMILY_DATA || []; }
@@ -100,45 +103,41 @@
     }).filter(o => o.id && o.name);
   }
 
+  // Phase 1: the tree comes from Supabase only, and only for an active signed-in user.
+  // The Excel / embedded loaders (rowsFromWorkbook, rowsFromEmbedded, normaliseRows) and
+  // the "Open Excel" handler are kept in this file but nothing calls them any more.
   async function loadData() {
-    // Data source priority:
-    //   * Signed-in active user: Supabase (live tree). On failure, fall back to the
-    //     static Excel flow and toast the error so the page still works.
-    //   * Anonymous / Supabase unavailable: existing Excel-over-http -> embedded -> Open Excel.
-    const useSupabase = !!(Auth && Auth.loaded && !Auth.initializing && Auth.session && Auth.isAdminOrActive());
-    if (useSupabase) {
-      const rows = await loadFromSupabase();
-      if (rows) return rows;
-      // Supabase failed — fall back, but only if Excel is reachable (anonymous path).
-      if (window.XLSX && location.protocol.startsWith('http')) {
-        try {
-          const res = await fetch(XLSX_PATH, { cache: 'no-store' });
-          if (!res.ok) throw new Error(res.status);
-          const wb = XLSX.read(await res.arrayBuffer(), { type: 'array', cellDates: true });
-          S.sourceLabel = 'Excel file (Supabase unavailable)';
-          toast(I18n.t('generic.supabaseUnavailableToast'));
-          return normaliseRows(rowsFromWorkbook(wb));
-        } catch (e) { console.warn('Could not read the Excel file as a Supabase fallback.', e); }
-      }
-      S.sourceLabel = 'embedded data (Supabase unavailable)';
-      return normaliseRows(rowsFromEmbedded());
-    }
-    // Anonymous / Supabase unavailable: original static priority.
-    if (window.XLSX && location.protocol.startsWith('http')) {
-      try {
-        const res = await fetch(XLSX_PATH, { cache: 'no-store' });
-        if (!res.ok) throw new Error(res.status);
-        const wb = XLSX.read(await res.arrayBuffer(), { type: 'array', cellDates: true });
-        S.sourceLabel = 'Excel file';
-        return normaliseRows(rowsFromWorkbook(wb));
-      } catch (e) { console.warn('Could not read the Excel file, using embedded data.', e); }
-    }
-    S.sourceLabel = 'embedded data';
-    return normaliseRows(rowsFromEmbedded());
+    if (!(Auth && Auth.client && Auth.isAdminOrActive())) return [];
+    const rows = await loadFromSupabase();
+    return rows || [];
   }
 
-  // Load the live tree from Supabase. Returns rows in the internal format, or null
-  // on failure (caller falls back). Only called for signed-in active users.
+  // Supabase caps a single response at 1000 rows, so page through. The sort order must
+  // be unique (dob + id is) or rows can repeat or vanish between pages.
+  const PAGE = 1000;
+  async function fetchAllPeople(admin) {
+    const out = [];
+    for (let from = 0; ; from += PAGE) {
+      let q = Auth.client
+        .from('people')
+        .select('*')
+        .order('dob', { ascending: true, nullsFirst: true })
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1);
+      // The RLS policy already hides soft-deleted rows from non-admins; say it again so
+      // this stays true if that policy is ever relaxed.
+      if (!admin) q = q.eq('is_deleted', false);
+      const { data, error } = await q;
+      if (error) throw error;
+      if (!data || !data.length) break;
+      out.push(...data);
+      if (data.length < PAGE) break;
+    }
+    return out;
+  }
+
+  // Load the live tree from Supabase. Returns rows in the internal format, or null on
+  // failure. Only ever called for an active signed-in user.
   async function loadFromSupabase() {
     if (!Auth || !Auth.client) return null;
     S.sourceLabel = 'Supabase';
@@ -146,15 +145,8 @@
       // RLS already limits rows: active users only, soft-deleted hidden for non-admin.
       // We also filter client-side for clarity.
       const admin = Auth.isAdmin();
-      const { data, error } = await Auth.client
-        .from('people')
-        .select(`id, legacy_id, parent_id, gender, full_name, nick_name, fathers_name, mothers_name,
-                spouse_name, spouse_father_name, dob, dob_text, place_of_birth, qualification,
-                dod, dod_text, place_of_burial, name_ur, name_hi, notes, photo_path, source,
-                path, is_deleted, created_by, updated_by, created_at, updated_at`)
-        .order('dob', { ascending: true });
-      if (error) throw error;
-      if (!data || !data.length) {
+      const data = await fetchAllPeople(admin);
+      if (!data.length) {
         toast(I18n.t('generic.emptyTree'));
         return [];
       }
@@ -170,12 +162,16 @@
         p.mother = r.mothers_name || null;
         p.spouse = r.spouse_name || null;
         p.spouseFather = r.spouse_father_name || null;
-        p.dob = fmtSupabaseDate(r.dob);
+        p.dob = fmtSupabaseDate(r.dob);          // the real date — Age and sorting need this
         p.dob_text = r.dob_text || null;
+        // What the UI shows prefers the original text ("1965 (approx)", "12/3/1940") and only
+        // falls back to the tidied date. Both stay available.
+        p.dob_display = p.dob_text || p.dob;
         p.pob = r.place_of_birth || null;
         p.qual = r.qualification || null;
         p.dod = fmtSupabaseDate(r.dod);
         p.dod_text = r.dod_text || null;
+        p.dod_display = p.dod_text || p.dod;
         p.burial = r.place_of_burial || null;
         p.name_ur = r.name_ur || null;
         p.name_hi = r.name_hi || null;
@@ -223,6 +219,10 @@
 
   /* ----------------------------- Build model ----------------------------- */
   function build(rows) {
+    // Keep every fetched row so the "Show deleted" toggle can rebuild without re-fetching.
+    S._allRows = rows;
+    // Soft-deleted people only join the model when the toggle is on (admins only).
+    rows = rows.filter(p => !(p.is_deleted && !S.showDeleted));
     S.people = rows;
     S.byId = new Map(rows.map(p => [p.id, p]));
     S.kids = new Map(rows.map(p => [p.id, []]));
@@ -277,6 +277,15 @@
     if (p.dod && !d) return null;
     const y = yearsBetween(b, d || new Date());
     return y < 0 ? null : d ? `${y} years (at death)` : `${y} years`;
+  }
+  // Timestamps (created_at/updated_at/changed_at) as a local, human-readable string.
+  function fmtWhen(iso) {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d)) return null;
+    return d.toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
   }
 
   /* ------------------------------- Filters ------------------------------- */
@@ -352,12 +361,30 @@
       try { localStorage.setItem('ft-theme', next); } catch (e) { /* ignore */ }
     };
     $('#btnAdmin').onclick = () => { if (Auth && Auth.isAdmin()) openAdminPanel(); };
-    // refresh the admin button visibility and close the admin panel whenever auth
-    // state changes (e.g. sign-out while the panel is open).
-    if (Auth) Auth._callbacks.onAuthChange = () => {
-      $('#btnAdmin').hidden = !(Auth && Auth.isAdmin());
-      if (adminPanelOpen && !(Auth && Auth.isAdmin())) closeAdminPanel();
+    $('#btnRefresh').onclick = () => syncFromServer(false);
+    $('#btnExport').onclick = exportToExcel;
+    // "Show deleted" rebuilds the model from rows already fetched — no second round trip.
+    $('#showDeleted').addEventListener('change', e => {
+      S.showDeleted = !!e.target.checked;
+      if (S._allRows.length) init(S._allRows);
+    });
+    // Refresh the admin button, close the admin panel on sign-out, and re-load the tree
+    // whenever the signed-in state or profile settles. The very first load happens
+    // before the session/profile is known, so without this a signed-in active user
+    // would keep seeing the static tree instead of the live Supabase one.
+    const onAuthStateSettled = () => {
+      const admin = !!(Auth && Auth.isAdmin());
+      $('#btnAdmin').hidden = !admin;
+      $('#btnExport').hidden = !admin;     // exporting the whole tree is admin-only
+      $('#deletedField').hidden = !admin;  // so is looking at soft-deleted people
+      if (admin) startLiveUpdates(); else stopLiveUpdates();
+      if (adminPanelOpen && !admin) closeAdminPanel();
+      reloadData();
+      // Re-draw the open panel: it may have been rendered before branch_access arrived,
+      // which is what decides whether an editor sees the edit buttons.
+      if (S.selected) renderPanel();
     };
+    if (Auth) Auth._callbacks.onAuthChange = onAuthStateSettled;
     if (Auth && Auth.isAdmin()) $('#btnAdmin').hidden = false;
 
     // Language toggle: opens a small picker; chosen language is persisted on the
@@ -370,13 +397,15 @@
     // to the i18n module.
     if (Auth) Auth._callbacks.onProfileChange = (prof) => {
       if (prof && prof.language) I18n.setLanguage(prof.language);
+      onAuthStateSettled();
     };
     // Initialise i18n from the profile if known, else from localStorage.
     if (Auth && Auth.profile && Auth.profile.language) I18n.setLanguage(Auth.profile.language);
     else if (localStorage.getItem('ft-lang')) I18n.setLanguage(localStorage.getItem('ft-lang'));
     I18n.apply();
 
-    $('#fileInput').addEventListener('change', async e => {
+    const fileEl = $('#fileInput');
+    if (fileEl) fileEl.addEventListener('change', async e => {
       const file = e.target.files[0]; if (!file) return;
       try {
         const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
@@ -430,6 +459,9 @@
     renderStats();
     if (S.view === 'tree') renderTree(refit); else renderTable();
     renderPanel();
+    // Dynamic markup (stats, panel, table) carries data-i18n attributes, so re-apply
+    // translations after every render.
+    I18n.apply();
   }
 
   function renderStats() {
@@ -509,11 +541,12 @@
       const nk = shownKids(p).length;
       const cls = ['node', gcls(p)];
       if (S.selected === id) cls.push('selected');
+      if (p.is_deleted) cls.push('deleted');
       const tg = nk ? `<button class="tg" data-tg="${esc(id)}" style="left:${ox + v.x + v.w / 2}px;top:${oy + v.y + NH - 11}px" title="${S.collapsed.has(id) ? 'Expand' : 'Collapse'}">${S.collapsed.has(id) ? '+ ' + nk : '−'}</button>` : '';
       html += `<div class="${cls.join(' ')}" data-id="${esc(id)}" style="left:${ox + v.x}px;top:${oy + v.y}px;width:${NW}px;height:${NH}px">
-        <div class="avatar">${esc(p._initials)}</div>
+        <div class="avatar">${esc(p._initials)}${p.photo_path ? `<img class="node-photo" data-card-photo="${esc(p.photo_path)}" alt="" hidden>` : ''}</div>
         <div class="meta"><div class="nm">${esc(p.name)}</div>${p.nick ? `<div class="nk">“${esc(p.nick)}”</div>` : ''}</div>
-        ${p.dod ? '<span class="dag" title="Deceased">†</span>' : ''}</div>`;
+        ${(p.dod || p.is_deleted) ? `<span class="dag" title="${p.dod ? 'Deceased' : ''}${p.dod && p.is_deleted ? ' · ' : ''}${p.is_deleted ? 'Deleted' : ''}">${p.dod ? '†' : ''}${p.is_deleted ? '✕' : ''}</span>` : ''}</div>`;
       if (p.spouse) {
         const sg = gcls(p) === 'male' ? 'female' : gcls(p) === 'female' ? 'male' : 'unknown';
         const sx = ox + v.x + NW;
@@ -526,7 +559,35 @@
     });
     world.innerHTML = html;
     world.style.width = W + 'px'; world.style.height = H + 'px';
+    hydrateCardPhotos();
     if (refit) fit(); else applyTransform();
+  }
+
+  // Cards show the person's photo instead of their initials. All the URLs for the whole
+  // tree are fetched in ONE signed-URL request (hundreds of cards would otherwise mean
+  // hundreds of round trips); each image stays hidden until it actually loads, so a
+  // missing or broken photo silently falls back to the initials.
+  async function hydrateCardPhotos() {
+    if (!(Auth && Auth.client && window.Photos && Photos.signedUrls)) return;
+    const imgs = [...document.querySelectorAll('#world img[data-card-photo]')];
+    if (!imgs.length) return;
+    const paths = [...new Set(imgs.map(i => i.getAttribute('data-card-photo')))].filter(Boolean);
+    let urls = null;
+    try {
+      urls = await Photos.signedUrls(paths);
+    } catch (e) {
+      console.warn('Could not sign the card photos:', e);
+      return;
+    }
+    if (!urls) return;
+    imgs.forEach(img => {
+      const path = img.getAttribute('data-card-photo');
+      const url = urls.get(Photos.toKey ? Photos.toKey(path) : path);
+      if (!url) return;
+      img.addEventListener('load', () => { img.hidden = false; }, { once: true });
+      img.addEventListener('error', () => { img.hidden = true; }, { once: true });
+      img.src = url;
+    });
   }
 
   /* ---- Pan / zoom ---- */
@@ -604,8 +665,8 @@
   let tipNode = null;
   function showTip(p, node) {
     const rows = [
-      ['Generation', 'Gen ' + p.gen], ['Spouse', p.spouse], ['Born', [p.dob, p.pob].filter(Boolean).join(' · ')],
-      ['Qualification', p.qual], ['Died', p.dod], ['Children', S.kids.get(p.id).length || null]
+      ['Generation', 'Gen ' + p.gen], ['Spouse', p.spouse], ['Born', [p.dob_display || p.dob, p.pob].filter(Boolean).join(' · ')],
+      ['Qualification', p.qual], ['Died', p.dod_display || p.dod], ['Children', S.kids.get(p.id).length || null]
     ].filter(r => r[1] != null && r[1] !== '');
     const tip = $('#tooltip');
     tip.innerHTML = `<h4>${esc(p.name)}</h4><div class="sub">${p.nick ? '“' + esc(p.nick) + '” · ' : ''}${esc(p.gender || '')}</div>
@@ -691,10 +752,16 @@
     const kids = S.kids.get(p.id);
     const sibs = p.parent ? S.kids.get(p.parent.id).filter(x => x.id !== p.id) : [];
     const age = ageText(p);
-    const personal = [row('Date of birth', p.dob), row('Age', age), row('Place of birth', p.pob), row('Qualification', p.qual)];
+    const personal = [row('Date of birth', p.dob_display || p.dob), row('Age', age), row('Place of birth', p.pob), row('Qualification', p.qual)];
     const family = [row("Father's name", p.father), row("Mother's name", p.mother), row('Spouse', p.spouse), row("Spouse's father", p.spouseFather)];
-    const passing = [row('Date of death', p.dod), row('Place of burial', p.burial)];
+    const passing = [row('Date of death', p.dod_display || p.dod), row('Place of burial', p.burial)];
     const record = [row('Individual ID', p.id), row('Legacy ID', p.legacy_id), row('Parent ID', p.parentId), row('Source file', p.source)];
+    // "Last edited" is written by hand rather than via row() so the admin-only audit-lookup
+    // below can swap the text in through textContent (which escapes it for us).
+    if (p.updated_at) {
+      record.push(`<div class="p-row"><div class="k">${esc(I18n.t('panel.lastEdited'))}</div>` +
+        `<div class="v" data-last-edited>${esc(fmtWhen(p.updated_at) || '')}</div></div>`);
+    }
     const body = sec('Personal', personal) + sec('Family', family) + sec('Passing', passing);
 
     let rel = '';
@@ -719,16 +786,42 @@
         ${isAdmin ? `<button class="btn ghost" id="btnAudit" data-i18n>panel.viewAudit</button>` : ''}
       </div>` : '';
 
+    // Photo (Supabase Storage). The bucket is private, so the image is shown through a
+    // short-lived signed URL. Everyone signed in can see it; only people who may edit
+    // this person get upload/replace/remove — and the database enforces that too.
+    const canManagePhoto = !!(Auth && Auth.client && canEdit);
+    // Photos only exist in the live Supabase tree; don't show an empty Photo block for
+    // every person while running off the static Excel data.
+    const showPhotoSec = !!(Auth && Auth.client && (S.sourceLabel === 'Supabase' || p.photo_path));
+    const photoSec = showPhotoSec ? `
+      <div class="p-sec" id="photoSec">
+        <h5 data-i18n>panel.photo</h5>
+        <div class="photo-wrap">
+          ${p.photo_path
+            ? `<button type="button" class="photo-frame has-photo" id="btnPhotoZoom" data-i18n="photos.viewLarger" data-i18n-attr="aria-label">
+                 <span class="photo-empty" data-i18n>photos.loading</span>
+                 <img class="photo-img" data-photo-img alt="${esc(I18n.fmt('photos.alt', { name: p.name }))}" hidden>
+               </button>`
+            : `<div class="photo-frame"><span class="photo-empty" data-i18n>photos.none</span></div>`}
+          ${canManagePhoto ? `<div class="photo-actions">
+            <button type="button" class="btn sm" id="btnPhotoPick" data-i18n="${p.photo_path ? 'photos.replace' : 'photos.upload'}">${p.photo_path ? 'Replace photo' : 'Upload photo'}</button>
+            ${p.photo_path ? `<button type="button" class="btn sm danger" id="btnPhotoRemove" data-i18n>photos.remove</button>` : ''}
+            <input type="file" id="photoInput" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+          </div>` : ''}
+        </div>
+      </div>` : '';
+
     pn.innerHTML = `
       <div class="p-head">
         <button class="icon-btn p-close" id="pClose" aria-label="Close">✕</button>
-        <div class="avatar p-avatar" style="${''}">${esc(p._initials)}</div>
+        <div class="avatar p-avatar" data-photo-avatar>${esc(p._initials)}<img class="p-avatar-img" data-photo-avatar-img alt="" hidden></div>
         <h3>${esc(p.name)}</h3>
         ${p.nick ? `<div class="p-nick">“${esc(p.nick)}”</div>` : ''}
         <div class="p-tags"><span class="tag ${gcls(p)}">${esc(p.gender || 'Gender unknown')}</span><span class="tag">Generation ${p.gen}</span>
           ${p.dod ? '<span class="tag gray">Deceased</span>' : ''}${kids.length ? `<span class="tag gray">${kids.length} child${kids.length > 1 ? 'ren' : ''}</span>` : ''}
           ${p.is_deleted ? '<span class="tag gray">Deleted</span>' : ''}${p.legacy_id ? `<span class="tag gray">legacy ${esc(p.legacy_id)}</span>` : ''}</div>
       </div>
+      ${photoSec}
       ${body.trim() ? body : '<div class="p-none">No further details recorded.</div>'}
       ${rel ? `<div class="p-sec"><h5>Relatives</h5>${rel}</div>` : ''}
       ${sec('Record', record)}
@@ -749,11 +842,185 @@
     if (canEdit) $('#btnEdit', pn).onclick = () => startEditing(p);
     if (canRequestDeletion) $('#btnRequestDeletion', pn).onclick = () => startDeletionRequest(p);
     if (isAdmin) {
-      $('#btnSoftDelete', pn).onclick = () => toggleSoftDelete(p);
-      $('#btnRestore', pn).onclick = () => toggleSoftDelete(p);
-      $('#btnAudit', pn).onclick = () => loadAudit(p);
+      // Soft-delete and restore are mutually exclusive: only one of the two is rendered.
+      const bDel = $('#btnSoftDelete', pn);
+      const bRes = $('#btnRestore', pn);
+      const bAud = $('#btnAudit', pn);
+      if (bDel) bDel.onclick = () => toggleSoftDelete(p);
+      if (bRes) bRes.onclick = () => toggleSoftDelete(p);
+      if (bAud) bAud.onclick = () => loadAudit(p);
     }
+    bindPhotoActions(pn, p);
+    hydratePhoto(pn, p);
+    hydrateLastEdited(pn, p);
     I18n.apply();
+  }
+
+  // "Last edited" already shows updated_at. Admins get the extra detail of WHO made the
+  // change, read from audit_log (RLS allows admins to read it). Failing to read it is
+  // not worth an error message — the timestamp is already on screen.
+  async function hydrateLastEdited(pn, p) {
+    if (!p.updated_at) return;
+    if (!(Auth && Auth.client && Auth.isAdmin())) return;
+    const slot = pn.querySelector('[data-last-edited]');
+    if (!slot) return;
+    try {
+      const { data, error } = await Auth.client
+        .from('audit_log')
+        .select('changed_by_name, changed_at')
+        .eq('person_id', p.id)
+        .order('changed_at', { ascending: false })
+        .limit(1);
+      if (error) throw error;
+      const hit = data && data[0];
+      if (!hit || S.selected !== p.id) return;
+      // The panel may have been replaced while this was in flight.
+      const live = $('#panel').querySelector('[data-last-edited]');
+      if (!live) return;
+      const when = fmtWhen(hit.changed_at) || fmtWhen(p.updated_at) || '';
+      live.textContent = hit.changed_by_name
+        ? I18n.fmt('panel.lastEditedBy', { name: hit.changed_by_name, date: when })
+        : I18n.fmt('panel.lastEditedOn', { date: when });
+    } catch (e) {
+      console.warn('Could not read the audit log for last-edited:', e);
+    }
+  }
+
+  /* --------------------- Photos (Supabase Storage) --------------------- */
+  // Wire the upload / replace / remove / zoom controls for the selected person.
+  function bindPhotoActions(pn, p) {
+    const input = $('#photoInput', pn);
+    const pick = $('#btnPhotoPick', pn);
+    if (pick && input) {
+      pick.onclick = () => input.click();
+      input.onchange = () => {
+        const file = input.files && input.files[0];
+        input.value = '';
+        if (file) uploadPhoto(p, file);
+      };
+    }
+    const rm = $('#btnPhotoRemove', pn);
+    if (rm) rm.onclick = () => removePhoto(p);
+    const zoom = $('#btnPhotoZoom', pn);
+    if (zoom) zoom.onclick = () => {
+      const img = zoom.querySelector('img[data-photo-img]');
+      if (img && img.src) openLightbox(p, img.src);
+    };
+  }
+
+  // Resolve the signed URL and swap it into the header avatar and the photo preview.
+  async function hydratePhoto(pn, p) {
+    if (!p || !p.photo_path || !Auth || !Auth.client || !window.Photos) return;
+    const wantId = p.id;
+    let url;
+    try {
+      url = await Photos.signedUrl(p.photo_path);
+    } catch (err) {
+      console.warn('Could not sign the photo URL:', err);
+      showPhotoError(pn);
+      return;
+    }
+    // The panel may have moved on to another person while we waited.
+    if (!url || S.selected !== wantId) return;
+    showImage(pn.querySelector('img[data-photo-img]'), url);
+    showImage(pn.querySelector('img[data-photo-avatar-img]'), url);
+  }
+
+  function showImage(img, url) {
+    if (!img) return;
+    const frame = img.closest('.photo-frame');
+    const hint = frame ? frame.querySelector('.photo-empty') : null;
+    img.addEventListener('load', () => {
+      img.hidden = false;
+      if (hint) hint.hidden = true;
+    }, { once: true });
+    img.addEventListener('error', () => {
+      img.hidden = true;
+      if (hint) { hint.hidden = false; hint.removeAttribute('data-i18n'); hint.textContent = I18n.t('photos.errLoad'); }
+    }, { once: true });
+    img.src = url;
+  }
+
+  function showPhotoError(scope) {
+    const hint = scope && scope.querySelector ? scope.querySelector('.photo-empty') : null;
+    if (hint) { hint.hidden = false; hint.removeAttribute('data-i18n'); hint.textContent = I18n.t('photos.errLoad'); }
+  }
+
+  async function uploadPhoto(p, file) {
+    if (!Auth || !Auth.client || !window.Photos) { toast(I18n.t('photos.notConnected')); return; }
+    const v = Photos.validate(file);
+    if (!v.ok) {
+      toast(v.error === 'photos.errSize' ? I18n.fmt('photos.errSize', { max: v.max }) : I18n.t(v.error));
+      return;
+    }
+    const btn = $('#btnPhotoPick', $('#panel'));
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = I18n.t('photos.uploading'); }
+    try {
+      const key = await Photos.upload(p.id, file, p.photo_path || null);
+      p.photo_path = key;
+      renderPanel();
+      toast(I18n.t('photos.uploaded'));
+    } catch (err) {
+      toast(photoError(err));
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+    }
+  }
+
+  async function removePhoto(p) {
+    if (!Auth || !Auth.client || !window.Photos) { toast(I18n.t('photos.notConnected')); return; }
+    if (!window.confirm(I18n.t('photos.removeConfirm'))) return;
+    const btn = $('#btnPhotoRemove', $('#panel'));
+    if (btn) { btn.disabled = true; btn.textContent = I18n.t('photos.removing'); }
+    try {
+      await Photos.remove(p.id, p.photo_path);
+      p.photo_path = null;
+      renderPanel();
+      toast(I18n.t('photos.removed'));
+    } catch (err) {
+      toast(photoError(err));
+      renderPanel();
+    }
+  }
+
+  // Map a storage/RLS failure to a friendly, translated message.
+  function photoError(err) {
+    if (err && err.code && String(err.code).indexOf('photos.') === 0) {
+      return err.code === 'photos.errSize' ? I18n.fmt('photos.errSize', { max: err.max }) : I18n.t(err.code);
+    }
+    const msg = (err && (err.message || err.error_description)) || String(err);
+    if (/row-level security|permission|not allowed|forbids|violates|unauthoriz|403/i.test(msg)) return I18n.t('photos.errPerm');
+    if (/invalid api key|jwt|invalid_token|expired/i.test(msg)) return I18n.t('photos.errAuth');
+    return I18n.fmt('photos.errFailed', { msg: msg });
+  }
+
+  // ---------- Photo lightbox ----------
+  let lightboxEl = null;
+  function lightboxKey(e) {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLightbox(); }
+  }
+  function openLightbox(p, src) {
+    if (!src) return;
+    closeLightbox();
+    const alt = I18n.fmt('photos.alt', { name: p.name });
+    const box = document.createElement('div');
+    box.className = 'lightbox';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', alt);
+    box.innerHTML = `<button class="icon-btn lightbox-close" aria-label="${esc(I18n.t('panel.close'))}">✕</button><img alt="${esc(alt)}">`;
+    box.querySelector('img').src = src;
+    box.addEventListener('click', e => {
+      if (e.target === box || e.target.closest('.lightbox-close')) closeLightbox();
+    });
+    document.body.appendChild(box);
+    lightboxEl = box;
+    // Capture phase, so Escape closes the lightbox instead of the detail panel behind it.
+    window.addEventListener('keydown', lightboxKey, true);
+  }
+  function closeLightbox() {
+    window.removeEventListener('keydown', lightboxKey, true);
+    if (lightboxEl) { lightboxEl.remove(); lightboxEl = null; }
   }
 
   // ---------- Edit form ----------
@@ -859,7 +1126,7 @@
           ? I18n.t('panel.addChildSub')
           : I18n.fmt('panel.editSub', { gen: p.gen, gender: esc(p.gender || 'unknown') })}</div>
       </div>
-      ${isAddChild ? `<div class="p-none" style="padding:6px 18px 12px">${I18n.fmt('panel.addChildOf', { name: esc(parent.name), gen: parent.gen })}</div>` : ''}
+      ${isAddChild ? `<div class="p-none" style="padding:6px 18px 12px">${I18n.fmt('panel.addChildOf', { name: esc(parent.name), gen: parent.gen })}<br><span style="font-size:12px">${I18n.t('photos.addChildNote')}</span></div>` : ''}
       <div class="p-sec" style="padding-top:14px">`;
     for (const [key, label, type, required] of EDIT_FIELDS) {
       const val = S.editForm.values[key] != null ? S.editForm.values[key] : '';
@@ -1124,8 +1391,10 @@
   async function toggleSoftDelete(p) {
     if (!Auth || !Auth.client) {      toast(I18n.t('save.notConnected')); return; }
     const wantDeleted = !p.is_deleted;
-    $('#btnSoftDelete', $('#panel')).disabled = true;
-    $('#btnRestore', $('#panel')).disabled = true;
+    const bDel = $('#btnSoftDelete', $('#panel'));
+    const bRes = $('#btnRestore', $('#panel'));
+    if (bDel) bDel.disabled = true;
+    if (bRes) bRes.disabled = true;
     try {
       const { error } = await Auth.client.from('people').update({ is_deleted: wantDeleted }).eq('id', p.id);
       if (error) throw error;
@@ -1552,6 +1821,176 @@
   let toastT;
   function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 3200); }
 
+  /* ------------------------------ Export to Excel ------------------------------ */
+  // Same column order as the original spreadsheet (see COLS at the top of this file) so
+  // an exported file can be opened next to the old one. Generation is the depth computed
+  // from the tree, which is what the app displays.
+  const EXPORT_COLS = [
+    ['Individual_ID', p => p.legacy_id || p.id],
+    ['Parent_ID', p => p.parent ? (p.parent.legacy_id || p.parent.id) : ''],
+    ['Generation', p => p.gen],
+    ['Gender', p => p.gender || ''],
+    ['Full_Name', p => p.name || ''],
+    ['Nick_Name', p => p.nick || ''],
+    ['Fathers_Name', p => p.father || ''],
+    ['Mothers_Name', p => p.mother || ''],
+    ['Spouse_Name', p => p.spouse || ''],
+    ['Spouse_Father_Name', p => p.spouseFather || ''],
+    ['DOB', p => p.dob_display || p.dob || ''],
+    ['Place_of_Birth', p => p.pob || ''],
+    ['Qualification', p => p.qual || ''],
+    ['Date_of_Death', p => p.dod_display || p.dod || ''],
+    ['Place_of_Burial', p => p.burial || ''],
+    ['Source_File', p => p.source || '']
+  ];
+
+  function exportToExcel() {
+    if (!(Auth && Auth.isAdmin())) { toast(I18n.t('export.adminOnly')); return; }
+    if (!window.XLSX) { toast(I18n.t('export.noSheetJs')); return; }
+    // Deleted people are exported only when the admin is actually looking at them.
+    const people = S.people.slice().sort((a, b) => a.gen - b.gen || String(a.name).localeCompare(String(b.name)));
+    if (!people.length) { toast(I18n.t('export.empty')); return; }
+    const header = EXPORT_COLS.map(c => c[0]);
+    const rows = people.map(p => {
+      const o = {};
+      EXPORT_COLS.forEach(([h, get]) => { const v = get(p); o[h] = v == null ? '' : v; });
+      return o;
+    });
+    try {
+      const ws = XLSX.utils.json_to_sheet(rows, { header });
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, SHEET_NAME);
+      XLSX.writeFile(wb, 'Family_Tree_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+      toast(I18n.fmt('export.done', { n: rows.length }));
+    } catch (e) {
+      console.warn('Export failed:', e);
+      toast(I18n.fmt('refresh.failed', { msg: (e && e.message) || String(e) }));
+    }
+  }
+
+  /* ---------------------------- Refresh & live data ---------------------------- */
+  let refreshing = false, autoRefreshT = null, pollTimer = null, peopleChannel = null, lastRefreshAt = 0;
+
+  // Pull the tree again, keeping the current selection when that person still exists.
+  // `quiet` skips the toast (used by Realtime and the 60s poll).
+  async function syncFromServer(quiet) {
+    if (refreshing || !(Auth && Auth.client && Auth.isAdminOrActive())) return;
+    refreshing = true;
+    const keep = S.selected;
+    const btn = $('#btnRefresh');
+    if (btn && !quiet) btn.classList.add('spin');
+    try {
+      Auth.clearPersonPaths();
+      if (window.Photos && Photos.clearCache) Photos.clearCache();   // photos may have changed
+      const rows = await loadData();
+      if (rows && rows.length) {
+        init(rows);
+        if (keep && S.byId.has(keep)) select(keep);
+      }
+      lastRefreshAt = Date.now();
+      if (!quiet) toast(I18n.t('refresh.done'));
+    } catch (e) {
+      console.warn('Refresh failed:', e);
+      if (!quiet) toast(I18n.fmt('refresh.failed', { msg: (e && e.message) || String(e) }));
+    } finally {
+      refreshing = false;
+      if (btn) setTimeout(() => btn.classList.remove('spin'), 400);
+    }
+  }
+
+  // Several change events can land together; collapse them into one reload.
+  function scheduleAutoRefresh() {
+    clearTimeout(autoRefreshT);
+    autoRefreshT = setTimeout(() => {
+      // Never yank the ground out from under a form someone is filling in.
+      if ($('#panel').querySelector('form')) { toast(I18n.t('live.updated')); return; }
+      syncFromServer(true);
+    }, 700);
+  }
+
+  // Realtime is the fast path; the 60s poll is a permanent safety net. A Realtime
+  // subscription can also fail silently (for example when public.people has not been
+  // added to the supabase_realtime publication), so polling always runs rather than
+  // only after an explicit error. Polls are skipped when Realtime already refreshed
+  // recently, so the two mechanisms don't double up.
+  function startLiveUpdates() {
+    if (peopleChannel || pollTimer) return;   // already listening
+    if (!(Auth && Auth.client && Auth.isAdminOrActive())) return;
+    try {
+      peopleChannel = Auth.client
+        .channel('public:people')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'people' }, scheduleAutoRefresh)
+        .subscribe(status => {
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            console.warn('Realtime unavailable (' + status + ') — falling back to the 60s poll.');
+            if (peopleChannel && Auth.client.removeChannel) {
+              try { Auth.client.removeChannel(peopleChannel); } catch (e) { /* nothing to do */ }
+            }
+            peopleChannel = null;
+          }
+        });
+    } catch (e) {
+      console.warn('Realtime subscribe failed — continuing with the 60s poll:', e);
+      peopleChannel = null;
+    }
+    startPolling();
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(() => {
+      if (document.hidden) return;                          // nobody is looking
+      if (Date.now() - lastRefreshAt < 55000) return;        // Realtime just did it
+      scheduleAutoRefresh();
+    }, 60000);
+  }
+
+  function stopLiveUpdates() {
+    clearTimeout(autoRefreshT);
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (peopleChannel && Auth && Auth.client && Auth.client.removeChannel) {
+      try { Auth.client.removeChannel(peopleChannel); } catch (e) { /* nothing to do */ }
+    }
+    peopleChannel = null;
+  }
+
+  // Loads the tree for the current session and nothing else. Called once from boot()
+  // and again whenever the signed-in state or profile changes. Signing out drops the
+  // data so a different account can never see the previous user's tree.
+  let loadingData = false;
+  async function reloadData() {
+    if (loadingData) return;
+    if (!(Auth && Auth.client && Auth.isAdminOrActive())) { clearTree(); return; }
+    if (S.sourceLabel === 'Supabase') return;   // already loaded for this session
+    loadingData = true;
+    try {
+      const rows = await loadData();
+      if (rows && rows.length) init(rows);
+    } catch (e) {
+      console.warn('Could not load the tree after a sign-in change:', e);
+    } finally {
+      loadingData = false;
+    }
+  }
+
+  // Drop every trace of the loaded tree (used when signing out).
+  function clearTree() {
+    if (!S.people.length && !S.sourceLabel) return;
+    S.people = []; S.byId = new Map(); S.kids = new Map(); S.roots = [];
+    S.pos = new Map(); S.selected = null; S.collapsed.clear(); S.sourceLabel = '';
+    S.editing = false; S.editForm = null; S.auditRows = [];
+    S._allRows = []; S.showDeleted = false;
+    const sd = $('#showDeleted'); if (sd) sd.checked = false;
+    stopLiveUpdates();
+    if (Auth) Auth.clearPersonPaths();
+    const world = $('#world'); if (world) world.innerHTML = '';
+    const panel = $('#panel'); if (panel) { panel.hidden = true; panel.innerHTML = ''; }
+    const table = $('#table'); if (table) table.innerHTML = '';
+    const stats = $('#stats'); if (stats) stats.innerHTML = '';
+    const sub = $('#subtitle'); if (sub) sub.textContent = '';
+    const rc = $('#resultCount'); if (rc) rc.textContent = '';
+  }
+
   function init(rows) {
     S.selected = null; S.collapsed.clear();
     build(rows);
@@ -1609,14 +2048,15 @@
     // before any Supabase data source or edit UI is used.
     if (Auth) { try { await Auth.init(); } catch (e) { console.warn('Auth.init failed:', e); } }
     if (!booted) { bindControls(); bindStage(); booted = true; }
-    const rows = await loadData();
-    if (!rows.length) { $('#subtitle').textContent = I18n.t('generic.noData'); toast(I18n.t('generic.noDataToast')); return; }
     if (Auth && Auth._failureReason) {
-      // Supabase client couldn't be created (bad config, missing CDN). Keep the
-      // static tree working and just tell the user the supabase path is unavailable.
-      toast(I18n.fmt('generic.supabaseUnavailable', { msg: Auth._failureReason }));
+      // The client could not be created (bad config / missing CDN). There is no static
+      // tree to fall back to any more; the gate shows the reason.
+      toast(I18n.fmt('auth.supabaseUnavailable', { msg: Auth._failureReason }));
+      return;
     }
-    init(rows);
+    // Phase 1: nothing loads until an active user is signed in. The auth callbacks call
+    // reloadData() again as soon as the session and profile are known.
+    reloadData();
   }
   boot();
 })();
