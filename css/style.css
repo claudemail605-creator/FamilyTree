@@ -40,6 +40,11 @@
   --shadow-lg: 0 10px 40px rgba(0, 0, 0, .5);
   --band: rgba(255, 255, 255, .03);
 }
+html[data-theme="dark"],
+html.dark {
+  background: var(--bg);
+  color: var(--ink);
+}
 
 * { box-sizing: border-box; }
 
