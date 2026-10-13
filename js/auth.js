@@ -256,6 +256,16 @@
         .then(({ data, error }) => {
           this.signInLoading = false;
           if (error) throw error;
+          // A successful sign-in must surface the new session to the gate, otherwise
+          // the app can stay stuck on the sign-in screen until onAuthStateChange fires
+          // (which is not guaranteed in the same tick and may not fire on some flows).
+          try { this.client.auth.getSession().then(s => {
+            if (this._getSessionTimer) { clearTimeout(this._getSessionTimer); this._getSessionTimer = null; }
+            this.initializing = false;
+            this.session = (s && s.data && s.data.session) || null;
+            this._sessionFresh = false;
+            this._afterSession();
+          }).catch(e => { console.warn('post-signIn getSession error:', e); }); } catch (e) { console.warn('post-signIn getSession call failed:', e); }
           return data;
         })
         .catch(err => {
