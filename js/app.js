@@ -1,40 +1,36 @@
 /* =====================================================================
-   Family Tree viewer
-   Data order: 1) data/Master_Family_Tree_Database.xlsx (when served over http)
-               2) js/data.js (embedded fallback, works when opened as a file)
-               3) "Open Excel" button (pick any .xlsx with the same columns)
+   Family Tree viewer — tree / table rendering, filters, pan & zoom, export.
+
+   The tree is READ FROM SUPABASE ONLY, and only for a signed-in active user
+   (Phase 1). There is no offline Excel fallback any more: the spreadsheet is
+   imported into the database instead (database/04_seed_from_excel.sql, or the
+   Admin screen's "Import from Excel").
+
+   The detail panel and the edit dialog live here and in js/personform.js; the
+   admin area is js/admin.js and the Phase 6 extras are js/extras.js. They reach
+   the model through the window.FT surface defined at the bottom of this file.
    ===================================================================== */
 (function () {
   'use strict';
 
-  const XLSX_PATH = 'data/Master_Family_Tree_Database.xlsx';
   const SHEET_NAME = 'Family_Data';
 
   // Layout constants (px)
   const NW = 180, NH = 72, GX = 16, GY = 66, PAD = 90, SG = 26;
   const unitW = p => p.spouse ? NW * 2 + SG : NW;   // person card (+ spouse card)
 
-  // Excel column -> internal field. Headers are matched ignoring case/underscores/spaces.
-  const COLS = {
-    individualid: 'id', parentid: 'parentId', generation: 'genFile', gender: 'gender',
-    fullname: 'name', nickname: 'nick', fathersname: 'father', mothersname: 'mother',
-    spousename: 'spouse', spousefathername: 'spouseFather', dob: 'dob',
-    placeofbirth: 'pob', qualification: 'qual', dateofdeath: 'dod',
-    placeofburial: 'burial', sourcefile: 'source'
-  };
-
-  // Columns shown in the table view / detail panel.
-  // Includes the extra Supabase fields (name_ur, name_hi, notes, photo_path, dob_text,
-  // dod_text, legacy_id, is_deleted). In the static/Excel mode these fields are absent
-  // and render as "—" everywhere (table, panel, edit form) — that's fine.
+  // Columns shown in the table view.
+  // [internal field, i18n key]. The key is resolved at render time so the header row
+  // follows the language like everything else.
   const TABLE_COLS = [
-    ['id', 'ID'], ['legacy_id', 'Legacy ID'], ['name', 'Full name'], ['nick', 'Nickname'],
-    ['gen', 'Gen'], ['gender', 'Gender'], ['father', "Father"], ['mother', "Mother"],
-    ['spouse', 'Spouse'], ['spouseFather', "Spouse's father"], ['dob', 'Date of birth'],
-    ['dob_text', 'DOB (original text)'], ['pob', 'Place of birth'], ['qual', 'Qualification'],
-    ['dod', 'Date of death'], ['dod_text', 'DOD (original text)'], ['burial', 'Place of burial'],
-    ['name_ur', 'Name (Urdu)'], ['name_hi', 'Name (Hindi)'], ['notes', 'Notes'],
-    ['photo_path', 'Photo'], ['source', 'Source file'], ['is_deleted', 'Deleted?']
+    ['id', 'table.col.id'], ['legacy_id', 'table.col.legacyId'], ['name', 'table.col.name'],
+    ['nick', 'table.col.nick'], ['gen', 'table.col.gen'], ['gender', 'table.col.gender'],
+    ['father', 'table.col.father'], ['mother', 'table.col.mother'], ['spouse', 'table.col.spouse'],
+    ['spouseFather', 'table.col.spouseFather'], ['dob', 'table.col.dob'],
+    ['dob_text', 'table.col.dobText'], ['pob', 'table.col.pob'], ['qual', 'table.col.qual'],
+    ['dod', 'table.col.dod'], ['dod_text', 'table.col.dodText'], ['burial', 'table.col.burial'],
+    ['name_ur', 'table.col.nameUr'], ['name_hi', 'table.col.nameHi'], ['notes', 'table.col.notes'],
+    ['photo_path', 'table.col.photo'], ['source', 'table.col.source'], ['is_deleted', 'table.col.deleted']
   ];
 
   const $ = (s, r = document) => r.querySelector(s);
@@ -51,14 +47,13 @@
     collapsed: new Set(),
     f: { q: '', gens: new Set(), genders: new Set(), status: '', branch: '', pob: '', qual: '', has: '' },
     view: 'tree', selected: null, sourceLabel: '',
-    showDeleted: false, _allRows: [],
+    showDeleted: false, _allRows: [], loadError: null,
     sort: { key: 'gen', dir: 1 },
     scale: 1, tx: 0, ty: 0, bbox: { w: 0, h: 0 }, pos: new Map(),
     editing: false, editForm: null, auditRows: []
   };
 
   /* ---------------------------- Data loading ---------------------------- */
-  function norm(h) { return String(h || '').toLowerCase().replace(/[^a-z]/g, ''); }
 
   function fmtDate(v) {
     if (v == null || v === '') return null;
@@ -79,33 +74,7 @@
     return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`;
   }
 
-  function rowsFromWorkbook(wb) {
-    const ws = wb.Sheets[SHEET_NAME] || wb.Sheets[wb.SheetNames[0]];
-    // NOTE: pass the WORKSHEET (ws) — handing the whole workbook to sheet_to_json
-    // silently returns no rows.
-    return XLSX.utils.sheet_to_json(ws, { defval: null, raw: true, cellDates: true });
-  }
-
-  function rowsFromEmbedded() { return window.FAMILY_DATA || []; }
-
-  function normaliseRows(rows) {
-    return rows.map(r => {
-      const o = {};
-      for (const k of Object.keys(r)) {
-        const f = COLS[norm(k)];
-        if (!f) continue;
-        let v = r[k];
-        if (f === 'dob' || f === 'dod') v = fmtDate(v);
-        else v = (v == null || String(v).trim() === '') ? null : String(v).trim();
-        o[f] = v;
-      }
-      return o;
-    }).filter(o => o.id && o.name);
-  }
-
   // Phase 1: the tree comes from Supabase only, and only for an active signed-in user.
-  // The Excel / embedded loaders (rowsFromWorkbook, rowsFromEmbedded, normaliseRows) and
-  // the "Open Excel" handler are kept in this file but nothing calls them any more.
   async function loadData() {
     if (!(Auth && Auth.client && Auth.isAdminOrActive())) return [];
     const rows = await loadFromSupabase();
@@ -140,13 +109,18 @@
   // failure. Only ever called for an active signed-in user.
   async function loadFromSupabase() {
     if (!Auth || !Auth.client) return null;
-    S.sourceLabel = 'Supabase';
+    // Kept as an i18n KEY, not a finished string: the subtitle has to say the same
+    // thing in every language, and the language can change after the data loaded.
+    S.sourceLabel = 'source.supabase';
     try {
       // RLS already limits rows: active users only, soft-deleted hidden for non-admin.
       // We also filter client-side for clarity.
       const admin = Auth.isAdmin();
       const data = await fetchAllPeople(admin);
       if (!data.length) {
+        // An empty database is not an error, but it still needs to be said out loud on
+        // the page — otherwise the screen is blank and looks broken.
+        showLoadError('generic.emptyTree');
         toast(I18n.t('generic.emptyTree'));
         return [];
       }
@@ -163,6 +137,10 @@
         p.spouse = r.spouse_name || null;
         p.spouseFather = r.spouse_father_name || null;
         p.dob = fmtSupabaseDate(r.dob);          // the real date — Age and sorting need this
+        // The untouched ISO date as well: the edit dialog's <input type=date> only
+        // accepts YYYY-MM-DD, and it must never rewrite a date just because the display
+        // format is DD/MM/YYYY.
+        p.dob_iso = r.dob ? String(r.dob).slice(0, 10) : null;
         p.dob_text = r.dob_text || null;
         // What the UI shows prefers the original text ("1965 (approx)", "12/3/1940") and only
         // falls back to the tidied date. Both stay available.
@@ -170,6 +148,7 @@
         p.pob = r.place_of_birth || null;
         p.qual = r.qualification || null;
         p.dod = fmtSupabaseDate(r.dod);
+        p.dod_iso = r.dod ? String(r.dod).slice(0, 10) : null;
         p.dod_text = r.dod_text || null;
         p.dod_display = p.dod_text || p.dod;
         p.burial = r.place_of_burial || null;
@@ -201,18 +180,21 @@
       // Build model — same as the static path. parentId is a uuid; build() matches by id,
       // so spouses (stored as text) do not create parent links, which is correct.
       build(out);
-      S.sourceLabel = 'Supabase';
+      S.sourceLabel = 'source.supabase';
+      clearLoadError();
       return out;
     } catch (err) {
       console.warn('loadFromSupabase failed:', err);
       const msg = err?.message || String(err);
-      // Friendly mapping for common RLS / network errors.
-      const friendly = msg.includes('invalid_token') || msg.includes('JWT')
-        ? 'Your sign-in expired — please sign in again.'
-        : msg.includes('not found') && msg.includes('table')
-        ? 'The people table wasn\'t found — check your Supabase project.'
-        : 'Couldn\'t load the tree from Supabase: ' + msg;
-      toast(friendly);
+      // Friendly mapping for common RLS / network errors. The key is stored so the
+      // banner follows a language change instead of freezing in one language.
+      const key = (msg.includes('invalid_token') || msg.includes('JWT'))
+        ? 'generic.sessionExpired'
+        : (msg.includes('not found') && msg.includes('table'))
+          ? 'generic.noTable'
+          : 'generic.loadFailed';
+      showLoadError(key, { msg });
+      toast(I18n.fmt(key, { msg }));
       return null;
     }
   }
@@ -243,7 +225,9 @@
     rows.forEach(p => { if (!seen.has(p.id)) { S.roots.push(p); walk(p, 0, seen); } });
     // text for searching
     rows.forEach(p => {
-      p._hay = [p.id, p.name, p.nick, p.spouse, p.dob, p.pob, p.qual, p.dod, p.burial]
+      // The search box matches the English name, the Urdu spelling and the Hindi
+      // spelling, so a relative can search in whichever script they think in.
+      p._hay = [p.id, p.name, p.name_ur, p.name_hi, p.nick, p.spouse, p.dob, p.dob_text, p.pob, p.qual, p.dod, p.dod_text, p.burial]
         .filter(Boolean).join(' ').toLowerCase();
       p._initials = initials(p.name);
     });
@@ -254,6 +238,23 @@
     return ((w[0] || '?')[0] + (w[1] ? w[1][0] : '')).toUpperCase();
   }
   const gcls = p => /^m/i.test(p.gender || '') ? 'male' : /^f/i.test(p.gender || '') ? 'female' : 'unknown';
+
+  // The name shown on screen. When Urdu or Hindi is the active language and the family
+  // has supplied a spelling, that one is used; otherwise the English name.
+  function dispName(p) {
+    if (!p) return '';
+    const lang = I18n.currentLang();
+    if (lang === 'ur' && p.name_ur) return p.name_ur;
+    if (lang === 'hi' && p.name_hi) return p.name_hi;
+    return p.name || '';
+  }
+  // Gender is STORED as Male/Female; only the label is translated.
+  function genderLabel(g) {
+    if (/^m/i.test(g || '')) return I18n.t('chip.male');
+    if (/^f/i.test(g || '')) return I18n.t('chip.female');
+    return I18n.t('panel.genderUnknown');
+  }
+  const fieldLabel = col => I18n.t(FIELD_LABELS[col] || col);
 
   /* ----------------------------- Date helpers ----------------------------- */
   function parseDate(s) {
@@ -276,7 +277,8 @@
     const d = parseDate(p.dod);
     if (p.dod && !d) return null;
     const y = yearsBetween(b, d || new Date());
-    return y < 0 ? null : d ? `${y} years (at death)` : `${y} years`;
+    if (y < 0) return null;
+    return d ? I18n.fmt('panel.ageAtDeath', { n: y }) : I18n.fmt('panel.ageValue', { n: y });
   }
   // Timestamps (created_at/updated_at/changed_at) as a local, human-readable string.
   function fmtWhen(iso) {
@@ -319,16 +321,17 @@
     // generation chips
     const gens = [...new Set(S.people.map(p => p.gen))].sort((a, b) => a - b);
     const gc = $('#genChips'); gc.innerHTML = '';
-    gens.forEach(g => gc.append(chip('Gen ' + g, () => toggle(S.f.gens, g), () => S.f.gens.has(g))));
-    // gender chips
+    gens.forEach(g => gc.append(chip(I18n.fmt('chip.gen', { g }), () => toggle(S.f.gens, g), () => S.f.gens.has(g))));
+    // gender chips — the stored value stays 'Male'/'Female', only the label is translated
     const gd = $('#genderChips'); gd.innerHTML = '';
-    [['male', 'Male'], ['female', 'Female']].forEach(([k, l]) => gd.append(chip(l, () => toggle(S.f.genders, k), () => S.f.genders.has(k))));
+    [['male', 'chip.male'], ['female', 'chip.female']].forEach(([k, key]) =>
+      gd.append(chip(I18n.t(key), () => toggle(S.f.genders, k), () => S.f.genders.has(k))));
 
-    fillSelect($('#fBranch'), [['', 'Whole family']].concat(
+    fillSelect($('#fBranch'), [['', I18n.t('filter.allBranches')]].concat(
       S.people.filter(p => S.kids.get(p.id).length).sort((a, b) => a.gen - b.gen || a.name.localeCompare(b.name))
-        .map(p => [p.id, `${'· '.repeat(p.gen)}${p.name}`])));
-    fillSelect($('#fPob'), [['', 'Any place']].concat(uniq('pob').map(v => [v, v])));
-    fillSelect($('#fQual'), [['', 'Any qualification']].concat(uniq('qual').map(v => [v, v])));
+        .map(p => [p.id, `${'· '.repeat(p.gen)}${dispName(p)}`])));
+    fillSelect($('#fPob'), [['', I18n.t('filter.anyPlace')]].concat(uniq('pob').map(v => [v, v])));
+    fillSelect($('#fQual'), [['', I18n.t('filter.anyQual')]].concat(uniq('qual').map(v => [v, v])));
   }
   function fillSelect(sel, opts) { sel.innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join(''); }
   function toggle(set, v) { set.has(v) ? set.delete(v) : set.add(v); }
@@ -363,6 +366,9 @@
     $('#btnAdmin').onclick = () => { if (Auth && Auth.isAdmin()) openAdminPanel(); };
     $('#btnRefresh').onclick = () => syncFromServer(false);
     $('#btnExport').onclick = exportToExcel;
+    // Phase 6 tools: relationship lookup, upcoming dates, statistics, print / PNG.
+    const toolsBtn = $('#btnTools');
+    if (toolsBtn) toolsBtn.onclick = () => { if (window.Extras) Extras.open(); };
     // "Show deleted" rebuilds the model from rows already fetched — no second round trip.
     $('#showDeleted').addEventListener('change', e => {
       S.showDeleted = !!e.target.checked;
@@ -378,7 +384,7 @@
       $('#btnExport').hidden = !admin;     // exporting the whole tree is admin-only
       $('#deletedField').hidden = !admin;  // so is looking at soft-deleted people
       if (admin) startLiveUpdates(); else stopLiveUpdates();
-      if (adminPanelOpen && !admin) closeAdminPanel();
+      if (adminPanelOpen() && !admin) closeAdminPanel();
       reloadData();
       // Re-draw the open panel: it may have been rendered before branch_access arrived,
       // which is what decides whether an editor sees the edit buttons.
@@ -404,17 +410,6 @@
     else if (localStorage.getItem('ft-lang')) I18n.setLanguage(localStorage.getItem('ft-lang'));
     I18n.apply();
 
-    const fileEl = $('#fileInput');
-    if (fileEl) fileEl.addEventListener('change', async e => {
-      const file = e.target.files[0]; if (!file) return;
-      try {
-        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-        const rows = normaliseRows(rowsFromWorkbook(wb));
-        if (!rows.length) throw new Error('No rows with Individual_ID and Full_Name were found.');
-        S.sourceLabel = file.name; init(rows); toast(I18n.fmt('generic.fileLoaded', { n: rows.length, name: esc(file.name) }));
-      } catch (err) { toast(I18n.fmt('generic.fileReadFailed', { msg: esc(err.message) })); }
-      e.target.value = '';
-    });
     $('#zoomIn').onclick = () => zoomBy(1.25);
     $('#zoomOut').onclick = () => zoomBy(1 / 1.25);
     $('#zoomFit').onclick = fit;
@@ -457,6 +452,7 @@
   function refresh(refit) {
     computeVisibility();
     renderStats();
+    renderLoadError();
     if (S.view === 'tree') renderTree(refit); else renderTable();
     renderPanel();
     // Dynamic markup (stats, panel, table) carries data-i18n attributes, so re-apply
@@ -471,7 +467,9 @@
       `<div class="stat"><b>${n}</b><span data-i18n>stats.people</span></div>` +
       `<div class="stat"><b>${gens}</b><span data-i18n>stats.generations</span></div>` +
       `<div class="stat"><b>${dec}</b><span data-i18n>stats.deceased</span></div>`;
-    $('#subtitle').textContent = I18n.fmt('brand.subtitle', { n, g: gens, source: S.sourceLabel });
+    $('#subtitle').textContent = I18n.fmt('brand.subtitle', {
+      n, g: gens, source: S.sourceLabel ? I18n.t(S.sourceLabel) : ''
+    });
     const rc = $('#resultCount');
     rc.textContent = filterActive()
       ? I18n.fmt('table.resultCount.filtered', { shown: S.view === 'tree' && visible ? visible.size : matchSet.size, n })
@@ -508,19 +506,18 @@
     $('#emptyMsg').hidden = !(filterActive() && !matchSet.size);
     if (!pos.size) { world.innerHTML = ''; return; }
 
-    let maxX = 0, maxY = 0, maxGen = 0;
-    pos.forEach((v, id) => { maxX = Math.max(maxX, v.x + v.w); maxY = Math.max(maxY, v.y + NH); maxGen = Math.max(maxGen, S.byId.get(id).gen); });
+    let maxX = 0, maxY = 0;
+    pos.forEach((v, id) => { maxX = Math.max(maxX, v.x + v.w); maxY = Math.max(maxY, v.y + NH); });
     const W = maxX + PAD * 2, H = maxY + PAD * 2;
     S.bbox = { w: W, h: H };
     const ox = PAD, oy = PAD;   // content offset inside the world
 
-    const active = filterActive();
     let html = '';
     // generation bands
     const gensUsed = new Set([...pos.keys()].map(id => S.byId.get(id).gen));
     gensUsed.forEach(g => {
       if (g % 2) return;
-      html += `<div class="band" style="top:${oy + (g - S.minGen) * (NH + GY) - GY / 2}px;height:${NH + GY}px;width:${W}px"><span>Generation ${g}</span></div>`;
+      html += `<div class="band" style="top:${oy + (g - S.minGen) * (NH + GY) - GY / 2}px;height:${NH + GY}px;width:${W}px"><span>${esc(I18n.fmt('panel.generation', { n: g }))}</span></div>`;
     });
     // edges
     let edges = '';
@@ -530,30 +527,33 @@
       shownKids(p).forEach(c => {
         const q = pos.get(c.id); if (!q) return;
         const x1 = ox + v.x + v.w / 2, y1 = oy + v.y + NH, x2 = ox + q.x + q.w / 2, y2 = oy + q.y, my = y1 + (y2 - y1) / 2;
-        const dim = '';
-        edges += `<path class="edge${dim}" d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}"/>`;
+        edges += `<path class="edge" d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}"/>`;
       });
     });
     html += `<svg width="${W}" height="${H}">${edges}</svg>`;
     // nodes
+    const canEditAny = !!(Auth && Auth.isActiveEditor && (Auth.isAdmin() || Auth.isActiveEditor()));
     pos.forEach((v, id) => {
       const p = S.byId.get(id);
       const nk = shownKids(p).length;
       const cls = ['node', gcls(p)];
       if (S.selected === id) cls.push('selected');
       if (p.is_deleted) cls.push('deleted');
-      const tg = nk ? `<button class="tg" data-tg="${esc(id)}" style="left:${ox + v.x + v.w / 2}px;top:${oy + v.y + NH - 11}px" title="${S.collapsed.has(id) ? 'Expand' : 'Collapse'}">${S.collapsed.has(id) ? '+ ' + nk : '−'}</button>` : '';
+      const canAdd = canEditAny && Auth.canEditPerson(id);
+      const tg = nk ? `<button class="tg" data-tg="${esc(id)}" style="left:${ox + v.x + v.w / 2}px;top:${oy + v.y + NH - 11}px" title="${esc(S.collapsed.has(id) ? I18n.t('tg.expand') : I18n.t('tg.collapse'))}">${S.collapsed.has(id) ? '+ ' + nk : '−'}</button>` : '';
       html += `<div class="${cls.join(' ')}" data-id="${esc(id)}" style="left:${ox + v.x}px;top:${oy + v.y}px;width:${NW}px;height:${NH}px">
         <div class="avatar">${esc(p._initials)}${p.photo_path ? `<img class="node-photo" data-card-photo="${esc(p.photo_path)}" alt="" hidden>` : ''}</div>
-        <div class="meta"><div class="nm">${esc(p.name)}</div>${p.nick ? `<div class="nk">“${esc(p.nick)}”</div>` : ''}</div>
-        ${(p.dod || p.is_deleted) ? `<span class="dag" title="${p.dod ? 'Deceased' : ''}${p.dod && p.is_deleted ? ' · ' : ''}${p.is_deleted ? 'Deleted' : ''}">${p.dod ? '†' : ''}${p.is_deleted ? '✕' : ''}</span>` : ''}</div>`;
+        <div class="meta"><div class="nm">${esc(dispName(p))}</div>${p.nick ? `<div class="nk">“${esc(p.nick)}”</div>` : ''}</div>
+        ${(p.dod || p.is_deleted) ? `<span class="dag" title="${esc([p.dod ? I18n.t('panel.deceased') : '', p.is_deleted ? I18n.t('panel.deleted') : ''].filter(Boolean).join(' · '))}">${p.dod ? '†' : ''}${p.is_deleted ? '✕' : ''}</span>` : ''}
+        ${canAdd ? `<button type="button" class="add-kid" data-addkid="${esc(id)}" title="${esc(I18n.t('panel.addChild'))}" aria-label="${esc(I18n.t('panel.addChild'))}">＋</button>` : ''}</div>`;
       if (p.spouse) {
         const sg = gcls(p) === 'male' ? 'female' : gcls(p) === 'female' ? 'male' : 'unknown';
         const sx = ox + v.x + NW;
         html += `<div class="spouse-link" style="left:${sx}px;top:${oy + v.y + NH / 2}px;width:${SG}px"><i>♥</i></div>
           <div class="node spouse ${sg}${S.selected === id ? ' selected' : ''}" data-id="${esc(id)}" data-spouse="1" style="left:${sx + SG}px;top:${oy + v.y}px;width:${NW}px;height:${NH}px">
           <div class="avatar">${esc(initials(p.spouse))}</div>
-          <div class="meta"><div class="nm">${esc(p.spouse)}</div><div class="nk">Spouse of ${esc(p.nick || p.name)}</div></div></div>`;
+          <div class="meta"><div class="nm">${esc(p.spouse)}</div><div class="nk">${esc(I18n.fmt('panel.spouseOf', { name: p.nick || dispName(p) }))}</div></div>
+          ${canAdd ? `<button type="button" class="add-kid" data-addkid="${esc(id)}" title="${esc(I18n.t('panel.addChild'))}" aria-label="${esc(I18n.t('panel.addChild'))}">＋</button>` : ''}</div>`;
       }
       html += tg;
     });
@@ -562,7 +562,6 @@
     hydrateCardPhotos();
     if (refit) fit(); else applyTransform();
   }
-
   // Cards show the person's photo instead of their initials. All the URLs for the whole
   // tree are fetched in ONE signed-URL request (hundreds of cards would otherwise mean
   // hundreds of round trips); each image stays hidden until it actually loads, so a
@@ -639,6 +638,9 @@
 
     // Cards: click (details), toggle button (collapse), hover (tooltip)
     world.addEventListener('click', e => {
+      // The small + on a card adds a child to that person without selecting them.
+      const addKid = e.target.closest('[data-addkid]');
+      if (addKid) { const p = S.byId.get(addKid.dataset.addkid); if (p) startAddChild(p); return; }
       const tg = e.target.closest('.tg');
       if (tg) {
         const id = tg.dataset.tg, before = S.pos.get(id);
@@ -664,27 +666,38 @@
   /* ------------------------------ Tooltip ------------------------------ */
   let tipNode = null;
   function showTip(p, node) {
+    const kids = (S.kids.get(p.id) || []).length;
     const rows = [
-      ['Generation', 'Gen ' + p.gen], ['Spouse', p.spouse], ['Born', [p.dob_display || p.dob, p.pob].filter(Boolean).join(' · ')],
-      ['Qualification', p.qual], ['Died', p.dod_display || p.dod], ['Children', S.kids.get(p.id).length || null]
+      [I18n.t('tooltip.generation'), I18n.fmt('tooltip.genShort', { n: p.gen })],
+      [I18n.t('edit.spouse'), p.spouse],
+      [I18n.t('tooltip.born'), [p.dob_display || p.dob, p.pob].filter(Boolean).join(' · ')],
+      [I18n.t('edit.qual'), p.qual],
+      [I18n.t('tooltip.died'), p.dod_display || p.dod],
+      [I18n.t('tooltip.children'), kids || null]
     ].filter(r => r[1] != null && r[1] !== '');
     const tip = $('#tooltip');
-    tip.innerHTML = `<h4>${esc(p.name)}</h4><div class="sub">${p.nick ? '“' + esc(p.nick) + '” · ' : ''}${esc(p.gender || '')}</div>
-      <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-      <div class="more">Click for full details</div>`;
+    tip.innerHTML = `<h4>${esc(dispName(p))}</h4><div class="sub">${p.nick ? esc(I18n.fmt('panel.nick', { nick: p.nick })) + ' · ' : ''}${esc(genderLabel(p.gender))}</div>
+      <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+      <div class="more">${esc(I18n.t('tooltip.more'))}</div>`;
     tip.hidden = false;
-    const r = node.getBoundingClientRect(); placeTip(r.right + 12, r.top);
+    const r = node.getBoundingClientRect();
+    placeTip(r.right + 12, r.top);
     tip._anchor = r;
   }
   function showSpouseTip(p, node) {
-    const rows = [['Spouse of', p.name], ["Spouse's father", p.spouseFather], ['Children together', S.kids.get(p.id).length || null]]
-      .filter(r => r[1] != null && r[1] !== '');
     const tip = $('#tooltip');
-    tip.innerHTML = `<h4>${esc(p.spouse)}</h4><div class="sub">Spouse</div>
-      <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-      <div class="more">Click for ${esc(p.nick || p.name)}’s full details</div>`;
+    const rows = [
+      [I18n.t('edit.spouse'), p.spouse],
+      [I18n.t('edit.spouseFather'), p.spouseFather],
+      [I18n.t('panel.spouseOf'), p.nick || dispName(p)]
+    ].filter(r => r[1] != null && r[1] !== '');
+    tip.innerHTML = `<h4>${esc(p.spouse)}</h4><div class="sub">${esc(I18n.fmt('panel.spouseOf', { name: dispName(p) }))}</div>
+      <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+      <div class="more">${esc(I18n.t('tooltip.more'))}</div>`;
     tip.hidden = false;
-    const r = node.getBoundingClientRect(); tip._anchor = r; placeTip(r.right + 12, r.top);
+    const r = node.getBoundingClientRect();
+    placeTip(r.right + 12, r.top);
+    tip._anchor = r;
   }
   function placeTip(x, y) {
     const tip = $('#tooltip'), w = tip.offsetWidth, h = tip.offsetHeight;
@@ -711,88 +724,91 @@
 
   function row(k, v) { return v != null && v !== '' ? `<div class="p-row"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>` : ''; }
   function sec(title, rows) { const r = rows.join(''); return r ? `<div class="p-sec"><h5>${title}</h5>${r}</div>` : ''; }
-  function relBtns(list) { return list.map(p => `<button data-goto="${esc(p.id)}">${esc(p.nick ? p.nick + ' – ' : '')}${esc(p.name)}</button>`).join(''); }
+  function relBtns(list) { return list.map(p => `<button data-goto="${esc(p.id)}">${esc(p.nick ? p.nick + ' – ' : '')}${esc(dispName(p))}</button>`).join(''); }
 
-  // Editable people fields (mirror the Supabase people columns an editor/admin may touch).
-  // These are also the fields the edit form renders. Static/Excel mode has none of these
-  // extra fields; the form still shows, but saving goes nowhere useful (no Supabase client).
-  const EDIT_FIELDS = [
-    ['full_name', 'Full name', 'text', true],
-    ['nick_name', 'Nickname', 'text', false],
-    ['gender', 'Gender', 'select', true],
-    ['fathers_name', "Father's name", 'text', false],
-    ['mothers_name', "Mother's name", 'text', false],
-    ['spouse_name', 'Spouse', 'text', false],
-    ['spouse_father_name', "Spouse's father", 'text', false],
-    ['dob', 'Date of birth', 'date', false],
-    ['dob_text', 'DOB (original text)', 'text', false],
-    ['place_of_birth', 'Place of birth', 'text', false],
-    ['qualification', 'Qualification', 'text', false],
-    ['dod', 'Date of death', 'date', false],
-    ['dod_text', 'DOD (original text)', 'text', false],
-    ['place_of_burial', 'Place of burial', 'text', false],
-    ['name_ur', 'Name (Urdu script)', 'text', false],
-    ['name_hi', 'Name (Hindi / Devanagari)', 'text', false],
-    ['notes', 'Notes', 'textarea', false]
-  ];
-  const GENDER_OPTIONS = [['Male', 'Male'], ['Female', 'Female']];
+  // Column -> translation key. The panel, the edit dialog, the table and the change
+  // history all label their rows from here, so a column is named in exactly one place.
+  const FIELD_LABELS = {
+    full_name: 'edit.fullName', nick_name: 'edit.nickname', name_ur: 'edit.nameUr',
+    name_hi: 'edit.nameHi', gender: 'edit.gender', fathers_name: 'edit.father',
+    mothers_name: 'edit.mother', spouse_name: 'edit.spouse',
+    spouse_father_name: 'edit.spouseFather', dob: 'edit.dob', dob_text: 'edit.dobText',
+    place_of_birth: 'edit.pob', qualification: 'edit.qual', dod: 'edit.dod',
+    dod_text: 'edit.dodText', place_of_burial: 'edit.burial', notes: 'edit.notes',
+    photo_path: 'table.col.photo', is_deleted: 'table.col.deleted',
+    parent_id: 'edit.parentField', legacy_id: 'table.col.legacyId', source: 'table.col.source'
+  };
 
+  // The form's own field list (with sections, validation and the gender choices) lives in
+  // js/personform.js; FIELD_LABELS above is what the panel, the table and the history share.
   function renderPanel() {
     const pn = $('#panel');
     const p = S.selected && S.byId.get(S.selected);
     if (!p) { pn.hidden = true; S.editing = false; return; }
-
-    if (S.editing && S.editForm && S.editForm.id === p.id) {
-      if (S.editForm.mode === 'deletionrequest') { renderDeletionRequestForm(pn, p); return; }
-      renderEditForm(pn, p);
-      return;
-    }
-    // view mode
     S.editing = false;
-    const kids = S.kids.get(p.id);
-    const sibs = p.parent ? S.kids.get(p.parent.id).filter(x => x.id !== p.id) : [];
+
+    const kids = S.kids.get(p.id) || [];
+    const sibs = p.parent ? (S.kids.get(p.parent.id) || []).filter(x => x.id !== p.id) : [];
     const age = ageText(p);
-    const personal = [row('Date of birth', p.dob_display || p.dob), row('Age', age), row('Place of birth', p.pob), row('Qualification', p.qual)];
-    const family = [row("Father's name", p.father), row("Mother's name", p.mother), row('Spouse', p.spouse), row("Spouse's father", p.spouseFather)];
-    const passing = [row('Date of death', p.dod_display || p.dod), row('Place of burial', p.burial)];
-    const record = [row('Individual ID', p.id), row('Legacy ID', p.legacy_id), row('Parent ID', p.parentId), row('Source file', p.source)];
-    // "Last edited" is written by hand rather than via row() so the admin-only audit-lookup
-    // below can swap the text in through textContent (which escapes it for us).
+    const personal = [
+      row(I18n.t('edit.dob'), p.dob_display || p.dob),
+      row(I18n.t('panel.age'), age),
+      row(I18n.t('edit.pob'), p.pob),
+      row(I18n.t('edit.qual'), p.qual)
+    ];
+    const family = [
+      row(I18n.t('edit.father'), p.father),
+      row(I18n.t('edit.mother'), p.mother),
+      row(I18n.t('edit.spouse'), p.spouse),
+      row(I18n.t('edit.spouseFather'), p.spouseFather)
+    ];
+    const passing = [
+      row(I18n.t('edit.dod'), p.dod_display || p.dod),
+      row(I18n.t('edit.burial'), p.burial)
+    ];
+    const record = [
+      row(I18n.t('table.col.id'), p.id),
+      row(I18n.t('table.col.legacyId'), p.legacy_id),
+      row(I18n.t('edit.parentField'), p.parentId),
+      row(I18n.t('table.col.source'), p.source)
+    ];
+    // "Last edited" is written by hand rather than via row() so the admin-only audit
+    // lookup below can swap the text in through textContent (which escapes it for us).
     if (p.updated_at) {
-      record.push(`<div class="p-row"><div class="k">${esc(I18n.t('panel.lastEdited'))}</div>` +
-        `<div class="v" data-last-edited>${esc(fmtWhen(p.updated_at) || '')}</div></div>`);
+      record.push('<div class="p-row"><div class="k">' + esc(I18n.t('panel.lastEdited')) + '</div>' +
+        '<div class="v" data-last-edited>' + esc(fmtWhen(p.updated_at) || '') + '</div></div>');
     }
-    const body = sec('Personal', personal) + sec('Family', family) + sec('Passing', passing);
+    const body = sec(I18n.t('panel.personal'), personal) + sec(I18n.t('panel.family'), family) + sec(I18n.t('panel.passing'), passing);
 
     let rel = '';
-    if (p.parent) rel += `<div class="rel-label">Parent</div><div class="rel">${relBtns([p.parent])}</div>`;
-    if (sibs.length) rel += `<div class="rel-label">Siblings (${sibs.length})</div><div class="rel">${relBtns(sibs)}</div>`;
-    if (kids.length) rel += `<div class="rel-label">Children (${kids.length})</div><div class="rel">${relBtns(kids)}</div>`;
+    if (p.parent) rel += '<div class="rel-label">' + esc(I18n.t('panel.parent')) + '</div><div class="rel">' + relBtns([p.parent]) + '</div>';
+    if (sibs.length) rel += '<div class="rel-label">' + esc(I18n.fmt('panel.siblings', { n: sibs.length })) + '</div><div class="rel">' + relBtns(sibs) + '</div>';
+    if (kids.length) rel += '<div class="rel-label">' + esc(I18n.fmt('panel.children', { n: kids.length })) + '</div><div class="rel">' + relBtns(kids) + '</div>';
 
-    // Action bar: Edit + Add child + deletion request (when user may edit this person),
-    // plus admin soft-delete/restore and audit log.
-    const canEdit = Auth && Auth.canEditPerson(p.id);
-    const isAdmin = Auth && Auth.isAdmin();
-    const isEditor = Auth && Auth.isActiveEditor();
+    // Action bar: Edit + Add child (when the user may edit this person), the admin-only
+    // "add a new branch", soft delete / restore, and the change history.
+    const canEdit = !!(Auth && Auth.canEditPerson(p.id));
+    const isAdmin = !!(Auth && Auth.isAdmin());
+    const isEditor = !!(Auth && Auth.isActiveEditor());
     const canRequestDeletion = isEditor && canEdit && !p.is_deleted;
+    const showHistory = !!(Auth && Auth.client) && (canEdit || isAdmin);
     const actionBar = (canEdit || isAdmin) ? `
       <div class="p-actions">
         ${canEdit ? `<button class="btn" id="btnAddChild" data-i18n>panel.addChild</button>` : ''}
         ${canEdit ? `<button class="btn" id="btnEdit" data-i18n>panel.edit</button>` : ''}
+        ${isAdmin ? `<button class="btn ghost" id="btnAddRoot" data-i18n>panel.addRoot</button>` : ''}
         ${canRequestDeletion ? `<button class="btn" id="btnRequestDeletion" data-i18n>panel.requestDeletion</button>` : ''}
         ${isAdmin ? (p.is_deleted
           ? `<button class="btn" id="btnRestore" data-i18n>panel.restore</button>`
-          : `<button class="btn" id="btnSoftDelete" data-i18n>panel.softDelete</button>`) : ''}
-        ${isAdmin ? `<button class="btn ghost" id="btnAudit" data-i18n>panel.viewAudit</button>` : ''}
+          : `<button class="btn danger" id="btnSoftDelete" data-i18n>panel.softDelete</button>`) : ''}
+        ${showHistory ? `<button class="btn ghost" id="btnAudit" data-i18n>panel.showHistory</button>` : ''}
       </div>` : '';
 
     // Photo (Supabase Storage). The bucket is private, so the image is shown through a
     // short-lived signed URL. Everyone signed in can see it; only people who may edit
     // this person get upload/replace/remove — and the database enforces that too.
     const canManagePhoto = !!(Auth && Auth.client && canEdit);
-    // Photos only exist in the live Supabase tree; don't show an empty Photo block for
-    // every person while running off the static Excel data.
-    const showPhotoSec = !!(Auth && Auth.client && (S.sourceLabel === 'Supabase' || p.photo_path));
+    const showPhotoSec = !!(Auth && Auth.client);
     const photoSec = showPhotoSec ? `
       <div class="p-sec" id="photoSec">
         <h5 data-i18n>panel.photo</h5>
@@ -800,35 +816,35 @@
           ${p.photo_path
             ? `<button type="button" class="photo-frame has-photo" id="btnPhotoZoom" data-i18n="photos.viewLarger" data-i18n-attr="aria-label">
                  <span class="photo-empty" data-i18n>photos.loading</span>
-                 <img class="photo-img" data-photo-img alt="${esc(I18n.fmt('photos.alt', { name: p.name }))}" hidden>
+                 <img class="photo-img" data-photo-img alt="${esc(I18n.fmt('photos.alt', { name: dispName(p) }))}" hidden>
                </button>`
             : `<div class="photo-frame"><span class="photo-empty" data-i18n>photos.none</span></div>`}
           ${canManagePhoto ? `<div class="photo-actions">
             <button type="button" class="btn sm" id="btnPhotoPick" data-i18n="${p.photo_path ? 'photos.replace' : 'photos.upload'}">${p.photo_path ? 'Replace photo' : 'Upload photo'}</button>
             ${p.photo_path ? `<button type="button" class="btn sm danger" id="btnPhotoRemove" data-i18n>photos.remove</button>` : ''}
-            <input type="file" id="photoInput" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+            <input type="file" id="photoInput" accept="image/jpeg,image/png,image/webp" hidden>
           </div>` : ''}
         </div>
       </div>` : '';
 
     pn.innerHTML = `
       <div class="p-head">
-        <button class="icon-btn p-close" id="pClose" aria-label="Close">✕</button>
+        <button class="icon-btn p-close" id="pClose" aria-label="${esc(I18n.t('panel.close'))}">✕</button>
         <div class="avatar p-avatar" data-photo-avatar>${esc(p._initials)}<img class="p-avatar-img" data-photo-avatar-img alt="" hidden></div>
-        <h3>${esc(p.name)}</h3>
-        ${p.nick ? `<div class="p-nick">“${esc(p.nick)}”</div>` : ''}
-        <div class="p-tags"><span class="tag ${gcls(p)}">${esc(p.gender || 'Gender unknown')}</span><span class="tag">Generation ${p.gen}</span>
-          ${p.dod ? '<span class="tag gray">Deceased</span>' : ''}${kids.length ? `<span class="tag gray">${kids.length} child${kids.length > 1 ? 'ren' : ''}</span>` : ''}
-          ${p.is_deleted ? '<span class="tag gray">Deleted</span>' : ''}${p.legacy_id ? `<span class="tag gray">legacy ${esc(p.legacy_id)}</span>` : ''}</div>
+        <h3>${esc(dispName(p))}</h3>
+        ${p.nick ? `<div class="p-nick">${esc(I18n.fmt('panel.nick', { nick: p.nick }))}</div>` : ''}
+        <div class="p-tags"><span class="tag ${gcls(p)}">${esc(genderLabel(p.gender))}</span><span class="tag">${esc(I18n.fmt('panel.generation', { n: p.gen }))}</span>
+          ${p.dod ? '<span class="tag gray">' + esc(I18n.t('panel.deceased')) + '</span>' : ''}${kids.length ? `<span class="tag gray">${esc(I18n.fmt('panel.children', { n: kids.length }))}</span>` : ''}
+          ${p.is_deleted ? '<span class="tag gray">' + esc(I18n.t('panel.deleted')) + '</span>' : ''}${p.legacy_id ? `<span class="tag gray">${esc(I18n.fmt('panel.legacy', { id: p.legacy_id }))}</span>` : ''}</div>
       </div>
       ${photoSec}
-      ${body.trim() ? body : '<div class="p-none">No further details recorded.</div>'}
-      ${rel ? `<div class="p-sec"><h5>Relatives</h5>${rel}</div>` : ''}
-      ${sec('Record', record)}
+      ${body.trim() ? body : '<div class="p-none">' + esc(I18n.t('panel.noDetails')) + '</div>'}
+      ${rel ? `<div class="p-sec"><h5>${esc(I18n.t('panel.relatives'))}</h5>${rel}</div>` : ''}
+      ${sec(I18n.t('panel.record'), record)}
       ${actionBar}
-      ${isAdmin ? `<div class="p-sec" id="auditBox"></div>` : ''}
-      ${p.name_ur ? `<div class="p-sec"><h5>Name (Urdu)</h5><div class="p-row"><div class="v" style="grid-column:1/-1;font-size:15px">${esc(p.name_ur)}</div></div></div>` : ''}
-      ${p.name_hi ? `<div class="p-sec"><h5>Name (Hindi)</h5><div class="p-row"><div class="v" style="grid-column:1/-1;font-size:15px">${esc(p.name_hi)}</div></div></div>` : ''}
+      ${showHistory ? `<div class="p-sec" id="auditBox"></div>` : ''}
+      ${p.name_ur ? `<div class="p-sec"><h5>${esc(I18n.t('panel.nameUr'))}</h5><div class="p-row"><div class="v" style="grid-column:1/-1;font-size:15px" dir="rtl">${esc(p.name_ur)}</div></div></div>` : ''}
+      ${p.name_hi ? `<div class="p-sec"><h5>${esc(I18n.t('panel.nameHi'))}</h5><div class="p-row"><div class="v" style="grid-column:1/-1;font-size:15px">${esc(p.name_hi)}</div></div></div>` : ''}
       <div style="height:16px"></div>`;
     pn.className = 'panel ' + gcls(p);
     pn.hidden = false;
@@ -840,22 +856,21 @@
     pn.querySelectorAll('[data-goto]').forEach(b => b.onclick = () => select(b.dataset.goto, { focus: true }));
     if (canEdit) $('#btnAddChild', pn).onclick = () => startAddChild(p);
     if (canEdit) $('#btnEdit', pn).onclick = () => startEditing(p);
+    if (isAdmin) $('#btnAddRoot', pn).onclick = () => startAddRoot();
     if (canRequestDeletion) $('#btnRequestDeletion', pn).onclick = () => startDeletionRequest(p);
     if (isAdmin) {
       // Soft-delete and restore are mutually exclusive: only one of the two is rendered.
       const bDel = $('#btnSoftDelete', pn);
       const bRes = $('#btnRestore', pn);
-      const bAud = $('#btnAudit', pn);
       if (bDel) bDel.onclick = () => toggleSoftDelete(p);
       if (bRes) bRes.onclick = () => toggleSoftDelete(p);
-      if (bAud) bAud.onclick = () => loadAudit(p);
     }
+    if (showHistory) $('#btnAudit', pn).onclick = () => toggleHistory(p);
     bindPhotoActions(pn, p);
     hydratePhoto(pn, p);
     hydrateLastEdited(pn, p);
     I18n.apply();
   }
-
   // "Last edited" already shows updated_at. Admins get the extra detail of WHO made the
   // change, read from audit_log (RLS allows admins to read it). Failing to read it is
   // not worth an error message — the timestamp is already on screen.
@@ -1023,762 +1038,270 @@
     if (lightboxEl) { lightboxEl.remove(); lightboxEl = null; }
   }
 
-  // ---------- Edit form ----------
+  // ---------- Add / edit (one shared dialog — js/personform.js) ----------
   function startEditing(p) {
-    S.editing = true;
-    S.editForm = { id: p.id, values: captureEditValues(p), mode: 'edit' };
-    renderPanel();
+    if (!window.PersonForm) { toast(I18n.t('save.notConnected')); return; }
+    PersonForm.open({ mode: 'edit', person: p });
   }
-
-  // ---------- Deletion request form (editor) ----------
-  function startDeletionRequest(p) {
-    if (!Auth || !Auth.client) {      toast(I18n.t('save.notConnected')); return; }
-    S.editing = true;
-    S.editForm = { id: p.id, mode: 'deletionrequest', parentId: null, reason: '' };
-    renderPanel();
-  }
-
-  function renderDeletionRequestForm(pn, p) {
-    const form = el('form', 'edit-form');
-    form.innerHTML = `
-      <div class="p-head">
-        <button class="icon-btn p-close" id="pClose" aria-label="Close" data-i18n-attr="aria-label">✕</button>
-        <div class="avatar p-avatar" style="width:44px;height:44px;font-size:16px">${esc(p._initials)}</div>
-        <h3>${I18n.fmt('panel.requestDeletionTitle', { name: esc(p.name) })}</h3>
-        <div class="p-nick" style="margin-top:4px">${I18n.t('panel.requestDeletionSub')}</div>
-      </div>
-      <div class="p-sec" style="padding-top:14px">
-        <div class="edit-field">
-          <label class="edit-label" for="drReason">${I18n.t('panel.deletionReason')} <span class="edit-req" data-i18n>edit.required</span></label>
-          <textarea class="edit-input" id="drReason" rows="4" placeholder="${esc(I18n.t('panel.deletionReasonPlaceholder') || '')}" style="resize:vertical;min-height:80px">${esc(S.editForm.reason)}</textarea>
-        </div>
-        <div class="p-none" style="padding:4px 18px 10px;font-size:12px">${I18n.t('panel.requestDeletionNote')}</div>
-      </div>
-      <div class="p-actions" style="padding:14px 18px;border-top:1px solid var(--line)">
-        <button type="button" class="btn" id="btnCancelEdit" data-i18n>panel.cancel</button>
-        <button type="submit" class="btn primary" id="btnSaveEdit" style="background:var(--accent);color:#fff;border-color:var(--accent)" data-i18n>panel.submitRequest</button>
-      </div>`;
-    pn.innerHTML = '';
-    pn.append(form);
-    pn.className = 'panel ' + gcls(p);
-    pn.hidden = false;
-    pn.scrollTop = 0;
-    $('#pClose', pn).onclick = () => { S.editing = false; S.editForm = null; renderPanel(); };
-    $('#btnCancelEdit', pn).onclick = () => { S.editing = false; S.editForm = null; renderPanel(); };
-    form.onsubmit = (e) => { e.preventDefault(); submitDeletionRequest(p, form); };
-    const first = form.querySelector('.edit-input');
-    if (first) setTimeout(() => first.focus(), 0);
-    I18n.apply();
-  }
-
-  async function submitDeletionRequest(p, form) {
-    const reason = document.getElementById('drReason').value.trim();
-    if (!reason) { toast('Please enter a reason for the deletion request.'); const r = document.getElementById('drReason'); if (r) { r.focus(); r.style.borderColor = 'var(--accent)'; } return; }
-    if (!Auth || !Auth.client) {      toast(I18n.t('save.notConnected')); return; }
-    const btn = $('#btnSaveEdit', form);
-    btn.disabled = true;
-    btn.textContent = 'Submitting…';
-    try {
-      const { error } = await Auth.client.from('deletion_requests').insert({
-        person_id: p.id,
-        reason: reason
-      });
-      if (error) throw error;
-      S.editing = false; S.editForm = null;
-      renderPanel();
-      toast(I18n.t('panel.requestSubmitted'));
-    } catch (err) {
-      const msg = err?.message || String(err);
-      const friendly = msg.includes('permission') || msg.includes('forbids') || msg.includes('not allowed')
-        ? I18n.t('save.permError')
-        : I18n.fmt('save.deleteRequestFailed', { msg });
-      toast(friendly);
-      btn.disabled = false;
-      btn.textContent = I18n.t('panel.submitRequest');
-    }
-  }
-
-  // ---------- Add child form ----------
   function startAddChild(p) {
-    S.editing = true;
-    S.editForm = { id: p.id, values: captureEditValues({}), mode: 'addchild', parentId: p.id };
-    renderPanel();
+    if (!window.PersonForm) { toast(I18n.t('save.notConnected')); return; }
+    PersonForm.open({ mode: 'addchild', parent: p });
+  }
+  // Admin only: a person with no parent, i.e. a brand new branch.
+  function startAddRoot() {
+    if (!(Auth && Auth.isAdmin())) return;
+    if (!window.PersonForm) { toast(I18n.t('save.notConnected')); return; }
+    PersonForm.open({ mode: 'addroot' });
   }
 
-  function captureEditValues(p) {
-    const v = {};
-    for (const [key] of EDIT_FIELDS) v[key] = p[key] != null ? p[key] : '';
-    return v;
-  }
-
-  function renderEditForm(pn, p) {
-    const form = el('form', 'edit-form');
-    const mode = S.editForm.mode;
-    const isAddChild = mode === 'addchild';
-    const parent = isAddChild ? S.byId.get(S.editForm.parentId) : null;
-    const titleName = parent ? parent.name : p.name;
-    form.innerHTML = `
-      <div class="p-head">
-        <button class="icon-btn p-close" id="pClose" aria-label="Close" data-i18n-attr="aria-label">✕</button>
-        <div class="avatar p-avatar" style="width:44px;height:44px;font-size:16px">${esc(p._initials)}</div>
-        <h3>${isAddChild ? I18n.fmt('panel.addChildTitle', { name: esc(titleName) }) : I18n.fmt('panel.editTitle', { name: esc(titleName) })}</h3>
-        <div class="p-nick" style="margin-top:4px">${isAddChild
-          ? I18n.t('panel.addChildSub')
-          : I18n.fmt('panel.editSub', { gen: p.gen, gender: esc(p.gender || 'unknown') })}</div>
-      </div>
-      ${isAddChild ? `<div class="p-none" style="padding:6px 18px 12px">${I18n.fmt('panel.addChildOf', { name: esc(parent.name), gen: parent.gen })}<br><span style="font-size:12px">${I18n.t('photos.addChildNote')}</span></div>` : ''}
-      <div class="p-sec" style="padding-top:14px">`;
-    for (const [key, label, type, required] of EDIT_FIELDS) {
-      const val = S.editForm.values[key] != null ? S.editForm.values[key] : '';
-      const field = el('div', 'edit-field');
-      const lbl = el('label', 'edit-label', I18n.t(label) + (required ? ' <span class="edit-req" data-i18n>edit.required</span>' : ''));
-      lbl.htmlFor = 'ef_' + key;
-      if (type === 'select') {
-        const sel = el('select', 'edit-input');
-        sel.id = 'ef_' + key;
-        sel.required = required;
-        GENDER_OPTIONS.forEach(([ov, ol]) => {
-          const opt = document.createElement('option');
-          opt.value = ov;
-          opt.textContent = ol;
-          if (ov === val) opt.selected = true;
-          sel.append(opt);
-        });
-        field.append(lbl, sel);
-      } else if (type === 'textarea') {
-        const ta = el('textarea', 'edit-input', esc(val));
-        ta.id = 'ef_' + key; ta.rows = 3; ta.required = required;
-        ta.placeholder = I18n.t('edit.textareaPlaceholder') || 'Optional — free text.';
-        field.append(lbl, ta);
-      } else {
-        const inp = el('input', 'edit-input', esc(val));
-        inp.id = 'ef_' + key;
-        inp.type = type === 'date' ? 'date' : 'text';
-        inp.required = required;
-        if (type === 'date') inp.placeholder = I18n.t('edit.datePlaceholder') || 'YYYY-MM-DD (or leave blank)';
-        field.append(lbl, inp);
+  // ---------- Deletion request (editor) ----------
+  // Editors cannot delete anything; they ask an admin. The request lands in
+  // deletion_requests and the admin resolves it from the Admin screen.
+  function startDeletionRequest(p) {
+    if (!(Auth && Auth.client)) { toast(I18n.t('save.notConnected')); return; }
+    const box = document.createElement('div');
+    box.className = 'modal';
+    box.innerHTML =
+      '<div class="modal-card" role="dialog" aria-modal="true">' +
+      '<div class="modal-head"><div>' +
+      '<h3>' + esc(I18n.fmt('panel.requestDeletionTitle', { name: dispName(p) })) + '</h3>' +
+      '<p class="modal-sub">' + esc(I18n.t('panel.requestDeletionSub')) + '</p></div>' +
+      '<button type="button" class="icon-btn" data-close aria-label="' + esc(I18n.t('panel.close')) + '">✕</button></div>' +
+      '<form class="edit-form modal-body" id="drForm">' +
+      '<div class="edit-field"><label class="edit-label" for="drReason">' + esc(I18n.t('panel.deletionReason')) +
+      ' <span class="edit-req">*</span></label>' +
+      '<textarea class="edit-input" id="drReason" rows="4" placeholder="' + esc(I18n.t('panel.deletionReasonPlaceholder')) + '"></textarea>' +
+      '<div class="edit-error" data-err hidden></div></div>' +
+      '<p class="admin-hint">' + esc(I18n.t('panel.requestDeletionNote')) + '</p>' +
+      '</form>' +
+      '<div class="modal-foot">' +
+      '<button type="button" class="btn" data-close>' + esc(I18n.t('panel.cancel')) + '</button>' +
+      '<button type="submit" form="drForm" class="btn primary" data-ok>' + esc(I18n.t('panel.submitRequest')) + '</button>' +
+      '</div></div>';
+    document.body.appendChild(box);
+    document.documentElement.classList.add('modal-open');
+    const shut = () => { box.remove(); document.documentElement.classList.remove('modal-open'); };
+    box.querySelectorAll('[data-close]').forEach(b => b.onclick = shut);
+    box.addEventListener('mousedown', e => { if (e.target === box) shut(); });
+    box.querySelector('#drForm').onsubmit = async e => {
+      e.preventDefault();
+      const reason = box.querySelector('#drReason').value.trim();
+      const errBox = box.querySelector('[data-err]');
+      const ta = box.querySelector('#drReason');
+      if (!reason) {
+        errBox.hidden = false;
+        errBox.textContent = I18n.t('edit.fullNameRequired');
+        ta.setAttribute('aria-invalid', 'true');
+        ta.focus();
+        return;
       }
-      form.append(field, el('div', ''));
-    }
-    form.innerHTML += `</div>
-      <div class="p-actions" style="padding:14px 18px;border-top:1px solid var(--line)">
-        <button type="button" class="btn" id="btnCancelEdit" data-i18n>panel.cancel</button>
-        <button type="submit" class="btn primary" id="btnSaveEdit" style="background:var(--accent);color:#fff;border-color:var(--accent)" data-i18n>${isAddChild ? 'panel.addGo' : 'panel.save'}</button>
-      </div>`;
-    pn.innerHTML = '';
-    pn.append(form);
-    pn.className = 'panel ' + gcls(p);
-    pn.hidden = false;
-    pn.scrollTop = 0;
-    $('#pClose', pn).onclick = () => { S.editing = false; S.editForm = null; renderPanel(); };
-    $('#btnCancelEdit', pn).onclick = () => { S.editing = false; S.editForm = null; renderPanel(); };
-    form.onsubmit = (e) => { e.preventDefault(); isAddChild ? saveAddChild(p, form) : saveEdit(p, form); };
-    I18n.apply();
-    // focus first field
-    const first = form.querySelector('.edit-input');
-    if (first) setTimeout(() => first.focus(), 0);
-  }
-
-  function readEditValues(form) {
-    const v = {};
-    for (const [key, , type] of EDIT_FIELDS) {
-      const el2 = document.getElementById('ef_' + key);
-      v[key] = el2 ? (el2.value || (type === 'select' ? '' : '')) : '';
-    }
-    return v;
-  }
-
-  function saveEdit(p, form) {
-    const vals = readEditValues(form);
-    // Basic validation: full_name required (and non-empty after trim).
-    if (!vals.full_name || !String(vals.full_name).trim()) {
-      toast('Full name is required.');
-      const nf = document.getElementById('ef_full_name');
-      if (nf) { nf.focus(); nf.style.borderColor = 'var(--accent)'; }
-      return;
-    }
-    // Build the update payload.
-    //   * dob/dod: send ISO date when set, null when cleared.
-    //   * gender: send only when a valid value is chosen (empty = no change). The DB
-    //     check constraint rejects empty strings and NULLs for gender.
-    //   * everything else: send the value as-is, including emptying a field.
-    const payload = {};
-    for (const [key, , type] of EDIT_FIELDS) {
-      let v = vals[key];
-      if (key === 'gender') {
-        if (!v || !GENDER_OPTIONS.some(([o]) => o === v)) continue; // no change or invalid → skip
-        payload[key] = v;
-        continue;
-      }
-      if (v === '') {
-        if (key === 'dob' || key === 'dod') payload[key] = null;
-        else payload[key] = '';
-      } else {
-        if (key === 'dob' || key === 'dod') {
-          const d = parseDate(v);
-          payload[key] = d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : null;
-          if (!payload[key]) { toast('“' + key + '“ is not a valid date.'); return; }
-        } else {
-          payload[key] = v;
-        }
-      }
-    }
-
-    if (!Auth || !Auth.client) {        toast(I18n.t('save.notConnected'));
-      return;
-    }
-    const before = performance.now();
-    $('#btnSaveEdit', form).disabled = true;
-    $('#btnSaveEdit', form).textContent = 'Saving…';
-    Auth.client.from('people').update(payload).eq('id', p.id)
-      .then(({ error }) => {
+      const ok = box.querySelector('[data-ok]');
+      ok.disabled = true;
+      try {
+        const { error } = await Auth.client.from('deletion_requests').insert({ person_id: p.id, reason: reason });
         if (error) throw error;
-        // Reload the person from the server so the panel reflects server values
-        // (including any trigger-stamped updated_at / path changes).
-        return Auth.client.from('people').select('*').eq('id', p.id).single();
-      })
-      .then(row => {
-        if (!row) { toast('Saved, but the person vanished — reload the page.'); S.editing = false; S.editForm = null; renderPanel(); return; }
-        // Merge server columns back into the local model so the panel + tree stay consistent.
-        Object.assign(p, mapSupabasePerson(row));
-        // refresh derived fields (initials, search haystack) for the updated person
-        p._initials = initials(p.name);
-        p._hay = [p.id, p.name, p.nick, p.spouse, p.dob, p.pob, p.qual, p.dod, p.burial]
-          .filter(Boolean).join(' ').toLowerCase();
-        // refresh path for canEditPerson
-        Auth.setPersonPath(p.id, (row.path && Array.isArray(row.path)) ? row.path.slice() : []);
-        S.editing = false; S.editForm = null;
+        shut();
+        toast(I18n.t('save.requestSubmitted'));
         renderPanel();
-        toast(I18n.t('save.changesSaved'));
-      })
-      .catch(err => {
-        const msg = err?.message || String(err);
-        const friendly = msg.includes('Only an admin can move a person')
-          ? I18n.t('save.moveError')
-          : msg.includes('Only an admin can delete or restore')
-          ? I18n.t('save.deleteRestoreError')
-          : msg.includes('new row for relation "people" violates foreign key')
-          || msg.includes('Parent not found')
-          ? I18n.t('save.foreignKeyError')
-          : msg.includes('permission') || msg.includes('not allowed') || msg.includes('forbids')
+      } catch (err) {
+        const msg = (err && err.message) || String(err);
+        toast(/permission|forbids|not allowed|policy/i.test(msg)
           ? I18n.t('save.permError')
-          : I18n.fmt('save.saveFailed', { msg });
-        toast(friendly);
-        toast(friendly);
-        $('#btnSaveEdit', form).disabled = false;
-        $('#btnSaveEdit', form).textContent = 'Save changes';
-      });
-  }
-
-  // Map a Supabase people row back to the internal model fields.
-  function mapSupabasePerson(r) {
-    const p = {};
-    p.id = r.id || null;
-    p.legacy_id = r.legacy_id || null;
-    p.parentId = r.parent_id || null;
-    p.gender = r.gender || null;
-    p.name = r.full_name || null;
-    p.nick = r.nick_name || null;
-    p.father = r.fathers_name || null;
-    p.mother = r.mothers_name || null;
-    p.spouse = r.spouse_name || null;
-    p.spouseFather = r.spouse_father_name || null;
-    p.dob = fmtSupabaseDate(r.dob);
-    p.dob_text = r.dob_text || null;
-    p.pob = r.place_of_birth || null;
-    p.qual = r.qualification || null;
-    p.dod = fmtSupabaseDate(r.dod);
-    p.dod_text = r.dod_text || null;
-    p.burial = r.place_of_burial || null;
-    p.name_ur = r.name_ur || null;
-    p.name_hi = r.name_hi || null;
-    p.notes = r.notes || null;
-    p.photo_path = r.photo_path || null;
-    p.source = r.source || null;
-    p.is_deleted = !!(r.is_deleted);
-    p.created_by = r.created_by || null;
-    p.updated_by = r.updated_by || null;
-    p.created_at = r.created_at ? new Date(r.created_at).toISOString() : null;
-    p.updated_at = r.updated_at ? new Date(r.updated_at).toISOString() : null;
-    p.path = (r.path && Array.isArray(r.path)) ? r.path.slice() : [];
-    return p;
-  }
-
-  // ---------- Add child (insert) ----------
-  async function saveAddChild(p, form) {
-    const vals = readEditValues(form);
-    if (!vals.full_name || !String(vals.full_name).trim()) {
-      toast('Full name is required.');
-      const nf = document.getElementById('ef_full_name');
-      if (nf) { nf.focus(); nf.style.borderColor = 'var(--accent)'; }
-      return;
-    }
-    if (!Auth || !Auth.client) {      toast(I18n.t('save.notConnectedAdd')); return; }
-    // Build the insert payload. parent_id is required (editor insert policy).
-    const payload = { parent_id: S.editForm.parentId };
-    for (const [key, , type] of EDIT_FIELDS) {
-      let v = vals[key];
-      if (v === '') {
-        if (key === 'dob' || key === 'dod') payload[key] = null;
-        else payload[key] = '';
-      } else {
-        if (key === 'gender') {
-          if (!GENDER_OPTIONS.some(([o]) => o === v)) { toast('Gender must be Male or Female.'); return; }
-          payload[key] = v;
-        } else if (key === 'dob' || key === 'dod') {
-          const d = parseDate(v);
-          payload[key] = d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : null;
-          if (!payload[key]) { toast('“' + key + '“ is not a valid date.'); return; }
-        } else {
-          payload[key] = v;
-        }
+          : I18n.fmt('save.deleteRequestFailed', { msg: msg }));
+        ok.disabled = false;
       }
-    }
-    // gender is required for insert? The DB allows NULL but the check constraint...
-    // Actually gender has check (gender in ('Male','Female')) which rejects NULL.
-    // So we must send a gender. Default to 'Male' if not specified.
-    if (!payload.gender) payload.gender = 'Male';
-
-    const btn = $('#btnSaveEdit', form);
-    btn.disabled = true;
-    btn.textContent = 'Adding…';
-    try {
-      const { data, error } = await Auth.client.from('people').insert(payload).select('*');
-      if (error) throw error;
-      if (!data || !data.length) { toast('Added, but the new person wasn\'t returned. Reload the page.'); S.editing = false; S.editForm = null; renderPanel(); return; }
-      const np = mapSupabasePerson(data[0]);
-      // Add the new person to the local model so the tree shows it immediately.
-      S.people.push(np);
-      S.byId.set(np.id, np);
-      S.kids.set(np.id, []);
-      if (np.parentId && S.byId.has(np.parentId)) S.kids.get(np.parentId).push(np);
-      else S.roots.push(np);
-      // recompute gen for the new person and descendants
-      const walk = (x, d, seen) => {
-        if (seen.has(x.id)) return; seen.add(x.id);
-        x.gen = d;
-        S.kids.get(x.id).forEach(c => walk(c, d + 1, seen));
-      };
-      walk(np, (np.parent ? np.parent.gen + 1 : 0), new Set());
-      // refresh derived fields
-      np._initials = initials(np.name);
-      np._hay = [np.id, np.name, np.nick, np.spouse, np.dob, np.pob, np.qual, np.dod, np.burial]
-        .filter(Boolean).join(' ').toLowerCase();
-      Auth.setPersonPath(np.id, (data[0].path && Array.isArray(data[0].path)) ? data[0].path.slice() : []);
-      S.editing = false; S.editForm = null;
-      // refresh the stats bar (people count / generations) and select the new person
-      renderStats();
-      select(np.id, { focus: true });
-      toast(I18n.fmt('save.added', { name: esc(np.name) }));
-    } catch (err) {
-      const msg = err?.message || String(err);
-      const friendly = msg.includes('Only an admin can move a person')
-        ? I18n.t('save.moveError')
-        : msg.includes('Cannot insert a child row')
-        || msg.includes('foreign key')
-        || msg.includes('Parent not found')
-        ? I18n.t('save.foreignKeyError')
-        : msg.includes('permission') || msg.includes('forbids')
-        ? I18n.t('save.permError')
-        : I18n.fmt('save.addFailed', { msg });
-      toast(friendly);
-      btn.disabled = false;
-      btn.textContent = 'Add child';
-    }
+    };
+    setTimeout(() => box.querySelector('#drReason').focus(), 0);
   }
 
   // ---------- Soft delete / restore (admin only) ----------
-  async function toggleSoftDelete(p) {
-    if (!Auth || !Auth.client) {      toast(I18n.t('save.notConnected')); return; }
-    const wantDeleted = !p.is_deleted;
-    const bDel = $('#btnSoftDelete', $('#panel'));
-    const bRes = $('#btnRestore', $('#panel'));
-    if (bDel) bDel.disabled = true;
-    if (bRes) bRes.disabled = true;
+  // The database keeps the person (is_deleted = true) and the audit log records it,
+  // so this is always reversible from the Admin screen.
+  function descendantsOf(id) {
+    const out = [];
+    const self = S.byId.get(id);
+    if (!self) return out;
+    const walk = x => (S.kids.get(x.id) || []).forEach(c => { out.push(c); walk(c); });
+    walk(self);
+    return out;
+  }
+
+  async function adminSoftDelete(p) {
+    if (!(Auth && Auth.client)) { toast(I18n.t('save.notConnected')); return; }
+    const below = descendantsOf(p.id);
+    const notDeleted = below.filter(d => !d.is_deleted);
+    const living = notDeleted.filter(d => !d.dod);
+    if (living.length) {
+      // Refuse: a living descendant would be orphaned by this. The rule is the same
+      // one the family data needs — deal with the children first.
+      window.alert(I18n.fmt('panel.deleteBlockedTitle', { name: dispName(p) }) + '\n\n' +
+        I18n.fmt('panel.deleteBlocked', { n: notDeleted.length, alive: living.length }));
+      return;
+    }
+    const msg = I18n.fmt('panel.deleteTitle', { name: dispName(p) }) + '\n\n' +
+      I18n.t('panel.deleteConfirm') + '\n' +
+      I18n.fmt('panel.deleteDescendants', { n: below.length });
+    if (!window.confirm(msg)) return;
+    const btn = $('#btnSoftDelete', $('#panel'));
+    if (btn) btn.disabled = true;
     try {
-      const { error } = await Auth.client.from('people').update({ is_deleted: wantDeleted }).eq('id', p.id);
+      const { error } = await Auth.client.from('people').update({ is_deleted: true }).eq('id', p.id);
       if (error) throw error;
-      p.is_deleted = wantDeleted;
-      if (wantDeleted) { closePanel(); toast(I18n.t('save.deleted')); }
-      else { renderPanel(); toast('Person restored.'); }
+      p.is_deleted = true;
+      closePanel();
+      toast(I18n.fmt('panel.deleteDone', { name: dispName(p) }));
+      if (S._allRows.length) init(S._allRows.filter(x => x.id !== p.id || S.showDeleted));
     } catch (err) {
-      const msg = err?.message || String(err);
-      const friendly = msg.includes('Only an admin can delete or restore')
-        ? 'Only an admin can delete or restore people.'
-        : 'Couldn\'t update: ' + msg;
-      toast(friendly);
+      const m = (err && err.message) || String(err);
+      toast(I18n.fmt('panel.deleteFailed', { msg: /Only an admin/.test(m) ? I18n.t('save.deleteRestoreError') : m }));
       renderPanel();
     }
   }
 
-  // ---------- Audit log tab (admin: all; editor: own branch) ----------
-  async function loadAudit(p) {
+  async function restorePerson(p) {
+    if (!(Auth && Auth.client)) { toast(I18n.t('save.notConnected')); return; }
+    const btn = $('#btnRestore', $('#panel'));
+    if (btn) btn.disabled = true;
+    try {
+      const { error } = await Auth.client.from('people').update({ is_deleted: false }).eq('id', p.id);
+      if (error) throw error;
+      p.is_deleted = false;
+      toast(I18n.t('save.restored'));
+      renderPanel();
+    } catch (err) {
+      toast(I18n.fmt('panel.deleteFailed', { msg: (err && err.message) || String(err) }));
+      renderPanel();
+    }
+  }
+
+  function toggleSoftDelete(p) { return p.is_deleted ? restorePerson(p) : adminSoftDelete(p); }
+
+  // ---------- Change history (audit_log) ----------
+  // Who changed what, when, with the old value next to the new one. Any update row can
+  // be put back ("Restore this version") through a normal UPDATE, so it is recorded in
+  // the history like any other change.
+  let historyOpenFor = null;
+
+  function toggleHistory(p) {
     const box = $('#auditBox', $('#panel'));
     if (!box) return;
-    if (!Auth || !Auth.client) { box.innerHTML = '<div class="p-none">Not connected to Supabase.</div>'; return; }
-    box.innerHTML = '<div class="p-none">Loading audit log…</div>';
+    if (historyOpenFor === p.id) {
+      historyOpenFor = null;
+      box.innerHTML = '';
+      const b = $('#btnAudit', $('#panel'));
+      if (b) b.textContent = I18n.t('panel.showHistory');
+      return;
+    }
+    historyOpenFor = p.id;
+    const b = $('#btnAudit', $('#panel'));
+    if (b) b.textContent = I18n.t('panel.hideHistory');
+    loadHistory(p, box);
+  }
+
+  async function loadHistory(p, box) {
+    box.innerHTML = '<div class="p-none">' + esc(I18n.t('panel.historyLoading')) + '</div>';
     try {
       const { data, error } = await Auth.client
         .from('audit_log')
         .select('id, action, changed_by, changed_by_name, old_data, new_data, changed_at')
         .eq('person_id', p.id)
-        .order('changed_at', { ascending: false });
+        .order('changed_at', { ascending: false })
+        .limit(200);
       if (error) throw error;
-      const rows = (data || []);
-      if (!rows.length) { box.innerHTML = '<div class="p-none">No changes recorded for this person yet.</div>'; return; }
-      box.innerHTML = `<div class="p-sec" style="padding-top:14px"><h5 style="margin-bottom:10px">Audit log (${rows.length})</h5>` +
-        rows.map(r => {
-          const when = r.changed_at ? new Date(r.changed_at).toLocaleString() : '—';
-          const who = r.changed_by_name || (r.changed_by ? '#' + r.changed_by.slice(0, 8) : '—');
-          const oldTxt = jsonDiff(r.old_data);
-          const newTxt = jsonDiff(r.new_data);
-          return `<div class="audit-row">
-            <div class="audit-meta"><span class="audit-action">${esc(r.action)}</span> · ${esc(who)} · ${esc(when)}</div>
-            ${oldTxt ? `<div class="audit-delta"><span class="audit-label">before</span><pre class="audit-json">${esc(oldTxt)}</pre></div>` : ''}
-            ${newTxt ? `<div class="audit-delta"><span class="audit-label">after</span><pre class="audit-json">${esc(newTxt)}</pre></div>` : ''}
-          </div>`;
-        }).join('') + '</div>';
+      if (historyOpenFor !== p.id) return;
+      const rows = data || [];
+      S.auditRows = rows;   // "Restore this version" needs the old_data snapshot
+      box.innerHTML = '<h5 class="hist-title">' + esc(I18n.t('panel.history')) + '</h5>' +
+        (rows.length ? rows.map(r => historyRowHtml(r, p)).join('')
+          : '<div class="p-none">' + esc(I18n.t('panel.historyNone')) + '</div>');
+      box.querySelectorAll('[data-restore-version]').forEach(btn => {
+        btn.onclick = () => restoreVersion(p, btn.dataset.restoreVersion, btn);
+      });
     } catch (err) {
-      box.innerHTML = '<div class="p-none">Couldn\'t load the audit log: ' + esc(err?.message || String(err)) + '</div>';
+      box.innerHTML = '<div class="p-none">' +
+        esc(I18n.fmt('panel.historyFailed', { msg: (err && err.message) || String(err) })) + '</div>';
     }
   }
 
-  function jsonDiff(j) {
-    if (!j || typeof j !== 'object') return String(j ?? '');
-    try {
-      const seen = new Set();
-      return JSON.stringify(j, (k, v) => {
-        if (typeof v === 'object' && v !== null) {
-          if (seen.has(v)) return '[Circular]';
-          seen.add(v);
-        }
-        return v;
-      }, 2);
-    } catch (e) { return String(j); }
+  function historyRowHtml(r, p) {
+    const action = I18n.t('panel.action.' + r.action);
+    const when = fmtWhen(r.changed_at) || '—';
+    const who = r.changed_by_name || (r.changed_by ? '#' + String(r.changed_by).slice(0, 8) : '—');
+    const diffs = fieldDiffs(r.old_data, r.new_data);
+    const canRestore = r.action === 'update' && r.old_data && (Auth && Auth.canEditPerson(p.id));
+    return '<div class="audit-row">' +
+      '<div class="audit-meta"><span class="audit-action ' + esc(r.action) + '">' + esc(action) + '</span> · ' +
+      esc(who) + ' · ' + esc(when) + '</div>' +
+      (diffs.length
+        ? '<details class="audit-details"><summary>' +
+        esc(I18n.fmt('panel.changedFields', { n: diffs.length })) + '</summary>' +
+        diffs.map(d => '<div class="change-row"><b>' + esc(d.label) + '</b> ' +
+          '<span class="change-old">' + esc(d.before === '' ? '—' : d.before) + '</span> → ' +
+          '<span class="change-new">' + esc(d.after === '' ? '—' : d.after) + '</span></div>').join('') +
+        '</details>' : '') +
+      (canRestore
+        ? '<button type="button" class="btn sm" data-restore-version="' + esc(String(r.id)) + '">' +
+        esc(I18n.t('panel.restoreVersion')) + '</button>' : '') +
+      '</div>';
   }
 
-  // ---------- Admin panel ----------
-  let adminPanelOpen = false;
+  // Which whitelisted columns differ between two audit snapshots.
+  function fieldDiffs(oldData, newData) {
+    const oldD = oldData || {}, newD = newData || {};
+    const out = [];
+    Object.keys(FIELD_LABELS).forEach(col => {
+      if (!(col in oldD) && !(col in newD)) return;
+      const before = oldD[col] == null ? '' : String(oldD[col]);
+      const after = newD[col] == null ? '' : String(newD[col]);
+      if (before === after) return;
+      out.push({ col: col, label: fieldLabel(col), before: before, after: after });
+    });
+    return out;
+  }
 
+  // Put the values from one audit row back. Only columns the form owns are written,
+  // and moving a person stays admin-only, exactly like a normal edit.
+  async function restoreVersion(p, auditId, btn) {
+    const rows = S.auditRows || [];
+    const row = rows.find(r => String(r.id) === String(auditId));
+    if (!row || !row.old_data) return;
+    const old = row.old_data;
+    if (!window.confirm(I18n.fmt('panel.restoreConfirm', { when: fmtWhen(row.changed_at) || '' }))) return;
+    const payload = {};
+    Object.keys(FIELD_LABELS).forEach(col => {
+      if (!(col in old)) return;
+      if (col === 'is_deleted' || col === 'photo_path' || col === 'legacy_id' || col === 'source' || col === 'parent_id') return;
+      let v = old[col];
+      if (col === 'dob' || col === 'dod') v = v ? String(v).slice(0, 10) : null;
+      payload[col] = v == null ? null : String(v);
+    });
+    if (Auth && Auth.isAdmin() && Object.prototype.hasOwnProperty.call(old, 'parent_id')) {
+      payload.parent_id = old.parent_id || null;
+    }
+    if (btn) btn.disabled = true;
+    try {
+      const { error } = await Auth.client.from('people').update(payload).eq('id', p.id);
+      if (error) throw error;
+      toast(I18n.t('panel.restoreDone'));
+      if (window.FT && FT.refreshAndSelect) await FT.refreshAndSelect(p.id);
+    } catch (err) {
+      toast(I18n.fmt('panel.restoreFailed', { msg: (err && err.message) || String(err) }));
+      if (btn) btn.disabled = false;
+    }
+  }
+  // The whole admin area now lives in js/admin.js — a full-screen dialog with tabs for
+  // users, deletion requests, recently deleted people, the activity feed, and the
+  // Excel import / JSON backup. app.js keeps only these three entry points.
   function openAdminPanel() {
-    adminPanelOpen = true;
-    S.selected = null;
-    $('#panel').hidden = false;
-    renderAdminPanel();
+    if (!(Auth && Auth.isAdmin())) return;
+    closePanel();
+    if (window.Admin) { window.Admin.open(); return; }
+    toast(I18n.t('admin.notDeployed'));
   }
-
   function closeAdminPanel() {
-    adminPanelOpen = false;
-    $('#panel').hidden = true;
-    S.editing = false;
-    S.editForm = null;
+    if (window.Admin && Admin.isOpen()) Admin.close();
   }
-
-  async function renderAdminPanel() {
-    const pn = $('#panel');
-    if (!pn || !Auth || !Auth.client) { pn.hidden = true; return; }
-    if (!Auth.isAdmin()) { closeAdminPanel(); return; }
-    pn.innerHTML = `
-      <div class="p-head">
-        <button class="icon-btn p-close" id="pClose" aria-label="Close">✕</button>
-        <div class="avatar p-avatar" style="width:44px;height:44px;font-size:16px">⚙</div>
-        <h3>Admin panel</h3>
-        <div class="p-nick" style="margin-top:4px">Manage branch access, deletion requests, and profiles.</div>
-      </div>
-      <div class="admin-section">
-        <h5>1. Branch access (who can edit what)</h5>
-        <div id="adminBranchBox"></div>
-      </div>
-      <div class="admin-section">
-        <h5>2. Deletion requests</h5>
-        <div id="adminDelreqBox"></div>
-      </div>
-      <div class="admin-section">
-        <h5>3. Profiles (users)</h5>
-        <div id="adminProfileBox"></div>
-      </div>
-      <div style="height:16px"></div>`;
-    pn.className = 'panel';
-    pn.hidden = false;
-    pn.scrollTop = 0;
-    $('#pClose', pn).onclick = closeAdminPanel;
-    await Promise.all([
-      renderAdminBranchAccess(pn),
-      renderAdminDeletionRequests(pn),
-      renderAdminProfiles(pn)
-    ]);
-  }
-
-  // ---- Branch access management ----
-  async function renderAdminBranchAccess(pn) {
-    const box = $('#adminBranchBox', pn);
-    if (!box) return;
-    box.innerHTML = 'Loading…';
-    try {
-      // Fetch all profiles (admin sees all).
-      const { data: profiles, error: pErr } = await Auth.client.from('profiles').select('id, email, full_name, role, active, language').order('full_name')
-        .then(r => r);
-      if (pErr) throw pErr;
-      // Fetch all branch_access rows.
-      const { data: ba, error: bErr } = await Auth.client.from('branch_access').select('user_id, person_id').order('user_id');
-      if (bErr) throw bErr;
-      const byUser = new Map();
-      (ba || []).forEach(r => {
-        if (!byUser.has(r.user_id)) byUser.set(r.user_id, []);
-        byUser.get(r.user_id).push(r.person_id);
-      });
-      // Fetch person names for all branch-access person_ids (one batched select).
-      const personIds = [...new Set((ba || []).map(r => r.person_id))];
-      let personNames = new Map();
-      if (personIds.length) {
-        const { data: pnRows, error: nErr } = await Auth.client.from('people').select('id, full_name, gender').in('id', personIds);
-        if (nErr) throw nErr;
-        (pnRows || []).forEach(r => { if (r.id) personNames.set(r.id, r); });
-      }
-      // Build per-user view.
-      const users = (profiles || []);
-      if (!users.length) { box.innerHTML = '<div class="admin-empty">No user accounts yet.</div>'; return; }
-      box.innerHTML = users.map(u => {
-        const branches = (byUser.get(u.id) || []);
-        const activeTag = u.active ? '' : ' <span class="tag tag gray" style="font-size:10px;padding:0 5px">inactive</span>';
-        const roleTag = u.role === 'admin' ? ' <span class="tag tag gray" style="font-size:10px;padding:0 5px">admin</span>' : '';
-        const chipHtml = branches.length
-          ? branches.map(bid => {
-              const pp = personNames.get(bid);
-              const label = pp ? (pp.full_name || pp.id.slice(0, 8)) : bid.slice(0, 8);
-              return `<span class="admin-chip">${esc(label)}
-                <span class="admin-chip-remove" data-remove-branch="${esc(u.id)}" data-personid="${esc(bid)}">×</span></span>`;
-            }).join('')
-          : '<span style="color:var(--ink-2);font-size:12px">No branches assigned — this editor can\'t edit anyone.</span>';
-        return `<div class="admin-row">
-          <div class="admin-name">${esc(u.full_name || u.email)}</div>
-          <div class="admin-email">${esc(u.email)}${activeTag}${roleTag}</div>
-          <div class="admin-chips">${chipHtml}</div>
-          <div class="admin-action-row">
-            <div class="admin-field">
-              <label>Assign branch for</label>
-              <select data-assign-user="${esc(u.id)}">
-                <option value="">Pick a person…</option>
-                ${S.people.filter(p => !p.is_deleted).sort((a, b) => a.gen - b.gen || a.name.localeCompare(b.name)).map(p => `<option value="${esc(p.id)}">${'· '.repeat(p.gen)}${esc(p.name)}</option>`).join('')}
-              </select>
-            </div>
-            <button class="btn sm" data-assign-go="${esc(u.id)}">Add</button>
-          </div>
-        </div>`;
-      }).join('');
-      // Wire remove buttons
-      box.querySelectorAll('[data-remove-branch]').forEach(el => {
-        el.onclick = async () => {
-          const uid = el.dataset.removeBranch;
-          const pid = el.dataset.personid;
-          await removeBranchAccess(uid, pid);
-        };
-      });
-      // Wire assign buttons
-      box.querySelectorAll('[data-assign-go]').forEach(el => {
-        el.onclick = async () => {
-          const uid = el.dataset.assignGo;
-          const sel = box.querySelector(`[data-assign-user="${esc(uid)}"]`);
-          const pid = sel && sel.value ? sel.value : null;
-          if (!pid) { toast(I18n.t('admin.pickPerson')); return; }
-          await assignBranchAccess(uid, pid);
-        };
-      });
-    } catch (err) {
-      box.innerHTML = '<div class="admin-empty">Couldn\'t load branch access: ' + esc(err?.message || String(err)) + '</div>';
-    }
-  }
-
-  async function assignBranchAccess(uid, personId) {
-    if (!Auth || !Auth.client) return;
-    // Verify the person exists and isn't deleted.
-    const person = S.byId.get(personId);
-    if (!person || person.is_deleted) { toast('That person isn\'t in the tree.'); return; }
-    try {
-      const { error } = await Auth.client.from('branch_access').insert({ user_id: uid, person_id: personId });
-      if (error) throw error;
-      toast(I18n.t('admin.branchAssigned'));
-      renderAdminPanel();
-    } catch (err) {
-      const msg = err?.message || String(err);
-      const friendly = msg.includes('duplicate') || msg.includes('unique')
-        ? 'That editor already has that branch.'
-        : msg.includes('forbids') || msg.includes('permission')
-        ? 'You don\'t have permission to change branch access.'
-        : 'Couldn\'t assign branch: ' + msg;
-      toast(friendly);
-    }
-  }
-
-  async function removeBranchAccess(uid, personId) {
-    if (!Auth || !Auth.client) return;
-    try {
-      const { error } = await Auth.client.from('branch_access').delete().match({ user_id: uid, person_id: personId });
-      if (error) throw error;
-      toast(I18n.t('admin.branchRemoved'));
-      renderAdminPanel();
-    } catch (err) {
-      const msg = err?.message || String(err);
-      const friendly = msg.includes('forbids') || msg.includes('permission')
-        ? 'You don\'t have permission to change branch access.'
-        : 'Couldn\'t remove branch: ' + msg;
-      toast(friendly);
-    }
-  }
-
-  // ---- Deletion request management ----
-  async function renderAdminDeletionRequests(pn) {
-    const box = $('#adminDelreqBox', pn);
-    if (!box) return;
-    box.innerHTML = 'Loading…';
-    try {
-      const { data, error } = await Auth.client
-        .from('deletion_requests')
-        .select('id, person_id, requested_by, reason, status, created_at, resolved_by, resolved_at')
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      const rows = data || [];
-      // Fetch person names for all person_ids (batched).
-      const personIds = [...new Set(rows.map(r => r.person_id).filter(Boolean))];
-      let personNames = new Map();
-      if (personIds.length) {
-        const { data: pnRows, error: nErr } = await Auth.client.from('people').select('id, full_name').in('id', personIds);
-        if (nErr) throw nErr;
-        (pnRows || []).forEach(r => { if (r.id) personNames.set(r.id, r.full_name); });
-      }
-      if (!rows.length) { box.innerHTML = '<div class="admin-empty">No deletion requests.</div>'; return; }
-      box.innerHTML = `<div class="admin-empty" style="font-style:normal;color:var(--ink-2);padding:2px 20px 10px;font-size:12px">${rows.length} request${rows.length > 1 ? 's' : ''} total · showing newest first.</div>` +
-        rows.map(r => {
-          const personName = personNames.get(r.person_id) || 'Unknown person';
-          const when = r.created_at ? new Date(r.created_at).toLocaleString() : '—';
-          const resolvedWhen = r.resolved_at ? new Date(r.resolved_at).toLocaleString() : '';
-          const isPending = r.status === 'pending';
-          return `<div class="delreq-row ${isPending ? 'delreq-pending' : 'delreq-resolved'}">
-            <div>
-              <div class="delreq-person">${esc(personName)}</div>
-              <div class="delreq-meta">Requested by ${esc(r.requested_by ? '#' + r.requested_by.slice(0, 8) : '—')} · ${esc(when)}${resolvedWhen ? ' · Resolved ' + esc(resolvedWhen) : ''}</div>
-              <div class="delreq-reason">${esc(r.reason || '(no reason given)')}</div>
-            </div>
-            <div class="delreq-actions">
-              ${isPending
-                ? `<button class="btn sm" data-approve="${esc(r.id)}">Approve (delete)</button>
-                   <button class="btn sm danger" data-reject="${esc(r.id)}">Reject</button>`
-                : `<span style="font-size:11.5px;color:var(--ink-2)">${esc(r.status)}</span>`}
-            </div>
-          </div>`;
-        }).join('');
-      box.querySelectorAll('[data-approve]').forEach(el => {
-        el.onclick = async () => { await resolveDeletionRequest(el.dataset.approve, 'approved'); };
-      });
-      box.querySelectorAll('[data-reject]').forEach(el => {
-        el.onclick = async () => { await resolveDeletionRequest(el.dataset.reject, 'rejected'); };
-      });
-    } catch (err) {
-      box.innerHTML = '<div class="admin-empty">Couldn\'t load deletion requests: ' + esc(err?.message || String(err)) + '</div>';
-    }
-  }
-
-  async function resolveDeletionRequest(reqId, status) {
-    if (!Auth || !Auth.client) return;
-    try {
-      // Resolve the request.
-      const { error: rErr } = await Auth.client.from('deletion_requests').update({
-        status: status,
-        resolved_by: Auth.session.user.id,
-        resolved_at: new Date().toISOString()
-      }).eq('id', reqId);
-      if (rErr) throw rErr;
-      // If approved, soft-delete the person.
-      if (status === 'approved') {
-        // Find the person id from the request.
-        const { data: req, error: rfErr } = await Auth.client.from('deletion_requests').select('person_id').eq('id', reqId).single();
-        if (rfErr && !req) { toast('Couldn\'t find the request.'); return; }
-        if (req) {
-          const { error: pErr } = await Auth.client.from('people').update({ is_deleted: true }).eq('id', req.person_id);
-          if (pErr) throw pErr;
-        }
-      }
-      toast(status === 'approved' ? I18n.t('admin.requestApproved') : I18n.t('admin.requestRejected'));
-      renderAdminPanel();
-    } catch (err) {
-      const msg = err?.message || String(err);
-      const friendly = msg.includes('Only an admin can delete or restore')
-        ? 'Only an admin can delete or restore people.'
-        : msg.includes('forbids') || msg.includes('permission')
-        ? 'You don\'t have permission to resolve deletion requests.'
-        : 'Couldn\'t resolve the request: ' + msg;
-      toast(friendly);
-    }
-  }
-
-  // ---- Profiles management ----
-  async function renderAdminProfiles(pn) {
-    const box = $('#adminProfileBox', pn);
-    if (!box) return;
-    box.innerHTML = 'Loading…';
-    try {
-      const { data, error } = await Auth.client.from('profiles').select('id, email, full_name, role, active, language').order('full_name');
-      if (error) throw error;
-      const rows = data || [];
-      if (!rows.length) { box.innerHTML = '<div class="admin-empty">No user accounts yet.</div>'; return; }
-      box.innerHTML = rows.map(u => {
-        const activeTag = u.active ? 'Active' : '<span style="color:var(--female)">Inactive (awaiting activation)</span>';
-        const roleOpts = [['admin', 'Admin'], ['editor', 'Editor']].map(([v, l]) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${l}</option>`).join('');
-        const langOpts = [['en', 'English'], ['ur', 'Urdu'], ['hi', 'Hindi']].map(([v, l]) => `<option value="${v}" ${u.language === v ? 'selected' : ''}>${l}</option>`).join('');
-        const activeChecked = u.active ? 'checked' : '';
-        return `<div class="admin-row">
-          <div class="admin-name" style="flex:0 0 200px">${esc(u.full_name || u.email)}</div>
-          <div class="admin-email">${esc(u.email)}</div>
-          <div class="admin-action-row" style="flex:1 1 280px">
-            <div class="admin-field" style="flex:1">
-              <label>Role</label>
-              <select data-prof-role="${esc(u.id)}">${roleOpts}</select>
-            </div>
-            <div class="admin-field" style="flex:0 0 120px">
-              <label>Lang</label>
-              <select data-prof-lang="${esc(u.id)}">${langOpts}</select>
-            </div>
-            <label class="admin-field" style="flex:0 0 60px;flex-direction:row;align-items:center;gap:4px;label{display:block}">
-              <input type="checkbox" data-prof-active="${esc(u.id)}" ${activeChecked}> Active
-            </label>
-            <button class="btn sm" data-prof-save="${esc(u.id)}">Save</button>
-          </div>
-        </div>`;
-      }).join('');
-      box.querySelectorAll('[data-prof-save]').forEach(el => {
-        el.onclick = async () => {
-          const uid = el.dataset.profSave;
-          const role = box.querySelector(`[data-prof-role="${esc(uid)}"]`)?.value;
-          const lang = box.querySelector(`[data-prof-lang="${esc(uid)}"]`)?.value;
-          const active = !!box.querySelector(`[data-prof-active="${esc(uid)}"]`)?.checked;
-          await saveProfile(uid, { role, language: lang, active });
-        };
-      });
-    } catch (err) {
-      box.innerHTML = '<div class="admin-empty">Couldn\'t load profiles: ' + esc(err?.message || String(err)) + '</div>';
-    }
-  }
-
-  async function saveProfile(uid, fields) {
-    if (!Auth || !Auth.client) return;
-    // Non-admin users cannot change their own role/active via this path — but the
-    // DB policy allows a user to update their own profile (id = auth.uid()). To keep
-    // the admin panel authoritative, admin-only changes to role/active are enforced
-    // by the DB policy (profiles_guard + RLS). We allow the request and let the DB
-    // reject forbidden changes.
-    try {
-      const { error } = await Auth.client.from('profiles').update(fields).eq('id', uid);
-      if (error) throw error;
-      toast(I18n.t('admin.profileUpdated'));
-      renderAdminPanel();
-    } catch (err) {
-      const msg = err?.message || String(err);
-      const friendly = msg.includes('forbids') || msg.includes('permission')
-        ? 'You don\'t have permission to change that profile.'
-        : 'Couldn\'t update profile: ' + msg;
-      toast(friendly);
-    }
-  }
+  function adminPanelOpen() { return !!(window.Admin && Admin.isOpen()); }
 
   function focusPerson(id) {
     // make sure the person is visible: expand ancestors, drop filters that hide them
@@ -1803,23 +1326,54 @@
     const key = S.sort.key, dir = S.sort.dir;
     const rows = S.people.slice().sort((a, b) => {
       const av = a[key] == null ? '' : a[key], bv = b[key] == null ? '' : b[key];
-      if (key === 'gen') return (av - bv) * dir || a.id.localeCompare(b.id);
+      if (key === 'gen') return (av - bv) * dir || String(a.id).localeCompare(String(b.id));
       if (key === 'dob' || key === 'dod') { const x = parseDate(av), y = parseDate(bv); return ((x ? +x : 1e15) - (y ? +y : 1e15)) * dir; }
       return String(av).localeCompare(String(bv), undefined, { numeric: true }) * dir;
     });
     const active = filterActive();
     const list = active ? rows.filter(p => matchSet.has(p.id)) : rows;
-    t.innerHTML = `<thead><tr>${TABLE_COLS.map(([k, l]) => `<th data-k="${k}" data-i18n>${l}</th>`).join('')}</tr></thead>
+    // Cells that need a translated or language-dependent value.
+    const cell = (p, k) => {
+      if (k === 'name') return dispName(p);
+      if (k === 'gender') return p.gender ? genderLabel(p.gender) : '';
+      if (k === 'is_deleted') return p.is_deleted ? I18n.t('panel.deleted') : '';
+      return p[k];
+    };
+    t.innerHTML = `<thead><tr>${TABLE_COLS.map(([k, labelKey]) => `<th data-k="${k}">${esc(I18n.t(labelKey))}</th>`).join('')}</tr></thead>
       <tbody>${list.map(p => `<tr data-id="${esc(p.id)}" class="${active && !matchSet.has(p.id) ? 'nomatch' : ''}${S.selected === p.id ? ' sel' : ''}">
-        ${TABLE_COLS.map(([k]) => { const v = p[k]; return v == null || v === '' ? '<td class="dash">—</td>' : `<td title="${esc(v)}">${esc(v)}</td>`; }).join('')}</tr>`).join('')}</tbody>`;
-    I18n.apply();
+        ${TABLE_COLS.map(([k]) => { const v = cell(p, k); const s = v == null || v === '' ? '' : String(v); return s === '' ? '<td class="dash">—</td>' : `<td title="${esc(s)}">${esc(s)}</td>`; }).join('')}</tr>`).join('')}</tbody>`;
     $('thead', t).onclick = e => { const th = e.target.closest('th'); if (!th) return; const k = th.dataset.k; S.sort = { key: k, dir: S.sort.key === k ? -S.sort.dir : 1 }; renderTable(); };
     $('tbody', t).onclick = e => { const tr = e.target.closest('tr'); if (tr) select(tr.dataset.id); };
   }
-
   /* --------------------------------- Misc --------------------------------- */
   let toastT;
   function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 3200); }
+
+  /* --------------------------- Load-error banner --------------------------- */
+  // A failed or empty load stays visible on the page for as long as it lasts. A toast
+  // vanishes after three seconds and leaves a blank screen behind, which reads as "the
+  // app lost my family" — the most alarming possible way to show a network problem.
+  function showLoadError(key, params) {
+    S.loadError = { key: key, params: params || null };
+    renderLoadError();
+  }
+  function clearLoadError() {
+    if (!S.loadError) return;
+    S.loadError = null;
+    renderLoadError();
+  }
+  function renderLoadError() {
+    const main = $('.main');
+    if (!main) return;
+    let box = $('#loadError');
+    if (!S.loadError) { if (box) box.remove(); return; }
+    if (!box) { box = el('div', 'load-error'); box.id = 'loadError'; main.insertBefore(box, main.firstChild); }
+    // esc() because the message can carry a raw server error string.
+    box.innerHTML = '<span class="msg">' + esc(I18n.fmt(S.loadError.key, S.loadError.params || {})) + '</span>' +
+      '<button type="button" class="btn" id="loadErrorRetry">' + esc(I18n.t('generic.retry')) + '</button>';
+    const btn = $('#loadErrorRetry');
+    if (btn) btn.onclick = () => { clearLoadError(); syncFromServer(true); };
+  }
 
   /* ------------------------------ Export to Excel ------------------------------ */
   // Same column order as the original spreadsheet (see COLS at the top of this file) so
@@ -1961,7 +1515,7 @@
   async function reloadData() {
     if (loadingData) return;
     if (!(Auth && Auth.client && Auth.isAdminOrActive())) { clearTree(); return; }
-    if (S.sourceLabel === 'Supabase') return;   // already loaded for this session
+    if (S.sourceLabel) return;   // already loaded for this session
     loadingData = true;
     try {
       const rows = await loadData();
@@ -1985,6 +1539,7 @@
     if (Auth) Auth.clearPersonPaths();
     const world = $('#world'); if (world) world.innerHTML = '';
     const panel = $('#panel'); if (panel) { panel.hidden = true; panel.innerHTML = ''; }
+    clearLoadError();
     const table = $('#table'); if (table) table.innerHTML = '';
     const stats = $('#stats'); if (stats) stats.innerHTML = '';
     const sub = $('#subtitle'); if (sub) sub.textContent = '';
@@ -2041,9 +1596,85 @@
   }
   function closeLangPicker() { const p = document.querySelector('.lang-picker'); if (p) p.remove(); }
 
+  /* ------------------------------------------------------------------
+     Shared surface for js/personform.js, js/admin.js and js/extras.js.
+     They are loaded as separate files, so this is the only way they can reach
+     the tree model, the permissions and the toast/refresh helpers.
+     ------------------------------------------------------------------ */
+  window.FT = {
+    esc: esc,
+    t: (key, params) => (params ? I18n.fmt(key, params) : I18n.t(key)),
+    toast: toast,
+    client: () => (Auth && Auth.client) || null,
+    me: () => (Auth && Auth.profile) || null,
+    isAdmin: () => !!(Auth && Auth.isAdmin()),
+    isEditor: () => !!(Auth && Auth.isActiveEditor()),
+    canEdit: id => !!(Auth && Auth.canEditPerson(id)),
+    people: () => S.people,
+    // The raw model, for the tools that need positions rather than people (the PNG export).
+    state: () => S,
+    personById: id => S.byId.get(id) || null,
+    kidsOf: id => S.kids.get(id) || [],
+    descendantsOf: descendantsOf,
+    FIELD_LABELS: FIELD_LABELS,
+    fieldLabel: fieldLabel,
+    dispName: dispName,
+    genderLabel: genderLabel,
+    parseDate: parseDate,
+    ageText: ageText,
+    fmtWhen: fmtWhen,
+    initials: initials,
+    refresh: () => refresh(false),
+    renderPanel: () => { if (S.selected) renderPanel(); },
+    select: id => select(id, { focus: true }),
+    // Draw the tree from a set of rows without a round trip. The print/PNG tools use
+    // it after a refresh, and the automated UI checks use it to render fixture data.
+    setRows: rows => init(rows),
+    clearPanel: () => closePanel(),
+    exportToExcel: exportToExcel,
+    reloadProfile: () => { if (Auth) { Auth._sessionFresh = false; Auth._ensureProfile(); } },
+    reload: () => reloadData(),
+    // Re-fetch from Supabase, rebuild the model and select a person. Used after every
+    // successful create / edit / delete so the tree, the table and the panel agree.
+    async refreshAndSelect(id) {
+      if (Auth && Auth.clearPersonPaths) Auth.clearPersonPaths();
+      const rows = await loadData();
+      if (Array.isArray(rows)) init(rows);
+      if (id && S.byId.has(id)) select(id, { focus: true });
+      else if (S.selected) renderPanel();
+      else renderStats();
+    }
+  };
+
+  // The i18n module only rewrites elements carrying a data-i18n attribute. Cards,
+  // the detail panel, the table, the tooltips and the dialogs build their text in
+  // JavaScript, so they have to be drawn again when the language changes.
+  document.addEventListener('i18n:change', () => {
+    if (window.PersonForm && PersonForm.isOpen()) PersonForm.close();
+    if (window.Admin && Admin.isOpen()) Admin.close();
+    if (window.Extras && Extras.isOpen && Extras.isOpen()) Extras.close();
+    hideTip();
+    if (!S.people.length) return;
+    buildControls();
+    // buildControls() rebuilds the dropdowns; put the current filter choices back.
+    $('#fStatus').value = S.f.status || '';
+    $('#fBranch').value = S.f.branch || '';
+    $('#fPob').value = S.f.pob || '';
+    $('#fQual').value = S.f.qual || '';
+    $('#fHas').value = S.f.has || '';
+    refresh(false);
+    if (S.selected) renderPanel();
+  });
+
   let booted = false;
+
   async function boot() {
     try { const t = localStorage.getItem('ft-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* ignore */ }
+    // Phase 6: an installable web app. Offline only ever serves the app shell — the
+    // service worker ignores Supabase and the CDNs so nothing private is cached.
+    if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+      navigator.serviceWorker.register('sw.js').catch(e => console.warn('Service worker not registered:', e && e.message));
+    }
     // Initialise the Supabase auth client (async). Auth.init() must be called
     // before any Supabase data source or edit UI is used.
     if (Auth) { try { await Auth.init(); } catch (e) { console.warn('Auth.init failed:', e); } }

@@ -1,9 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>        <meta charset="UTF-8">
+<head>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1f6f6b">
   <title data-i18n>brand.title</title>
   <link rel="stylesheet" href="css/style.css">
+  <!-- Installable web app (Phase 6): manifest + icons, so relatives can add the
+       tree to their phone's home screen. -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" sizes="192x192">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Family Tree">
+  <!-- Fonts for Urdu and Hindi are loaded only when that language is chosen
+       (see loadFonts() in js/i18n.js); the preconnects just warm the connection. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
 </head>
 <body>
   <header class="topbar">
@@ -26,12 +40,14 @@
       <button data-view="table" role="tab" data-i18n>view.table</button>
     </div>
 
-    <!-- Excel import is gone; admins get an export instead. The old .xlsx loader is
-         still in js/app.js but nothing calls it any more. -->
+    <!-- Admins only: the spreadsheet export sits in the top bar. Importing an .xlsx is
+         in the admin screen (Admin → Import and backup). -->
     <button class="btn ghost" id="btnExport" title="Export to Excel" data-i18n="export.title" data-i18n-attr="title" hidden>
       <span data-i18n>export.button</span>
     </button>
     <div class="auth" id="authArea"></div>
+    <!-- Phase 6 tools: how are we related, upcoming dates, statistics, print / PNG. -->
+    <button class="icon-btn" id="btnTools" title="Tools" data-i18n="extra.tools" data-i18n-attr="title" aria-label="Tools">🧰</button>
     <button class="icon-btn" id="btnRefresh" title="Refresh data" data-i18n="refresh.title" data-i18n-attr="title" aria-label="Refresh data">⟳</button>
     <button class="icon-btn" id="btnAdmin" data-i18n="btnAdmin" data-i18n-attr="aria-label" title="Admin panel" hidden>⚙</button>
     <div class="lang" id="langArea">
@@ -112,6 +128,8 @@
 
     <main class="main">
       <section id="treeView" class="stage" aria-label="Family tree">
+        <!-- Title + date for Print / Save as PDF (visible only when printing). -->
+        <div class="print-head" id="printHead"></div>
         <div id="world" class="world"></div>
         <div class="stage-ctrls">
           <button class="icon-btn" id="zoomIn" title="Zoom in" data-i18n="zoom.in" data-i18n-attr="title">+</button>
@@ -142,14 +160,18 @@
 
   <!-- Supabase (pinned 2.x UMD). Used only when a user signs in. -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.min.js"></script>
-  <!-- Excel reader (loaded from a CDN; if offline the embedded data in js/data.js is used) -->
+  <!-- Excel reader/writer, used only by the admin screen ("Import from Excel" and
+       "Export to Excel"). The tree itself is read from Supabase, never from a bundled
+       spreadsheet. -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="js/config.js"></script>
   <script src="js/supabase.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/i18n.js"></script>
   <script src="js/photos.js"></script>
-  <script src="js/data.js"></script>
+  <script src="js/personform.js"></script>
+  <script src="js/admin.js"></script>
+  <script src="js/extras.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
