@@ -27,7 +27,12 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-const SITE_URL = (Deno.env.get('SITE_URL') ?? '').replace(/\/+$/, '');
+// SITE_URL points the invitation / reset links at the website. It is normally a
+// function secret (supabase secrets set SITE_URL=...), but the production URL is
+// public information, so it is also the hard-coded default below. Setting the
+// secret still overrides it — choose the secret when the site moves elsewhere.
+const SITE_URL_FALLBACK = 'https://family-tree-eight-beige.vercel.app';
+const SITE_URL = ((Deno.env.get('SITE_URL') ?? '').replace(/\/+$/, '')) || SITE_URL_FALLBACK;
 
 // The service client is created lazily and never logged or returned.
 // (Typed loosely on purpose: the client's generics are not worth threading
