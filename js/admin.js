@@ -134,7 +134,7 @@
   // A nested dialog (invite, edit user, set password, confirm) inside the admin card.
   function dialog(opts) {
     const wrap = document.createElement('div');
-    wrap.className = 'modal-sub';
+    wrap.className = 'modal-sub-wrap';
     wrap.innerHTML =
       '<div class="modal-sub-dialog" role="dialog" aria-modal="true">' +
       '<h4>' + esc(opts.title) + '</h4>' +
@@ -179,10 +179,11 @@
   }
 
   function personOptionLabel(p) {
-    const bits = [p.name];
+    // Language-aware: shows the Urdu/Hindi spelling when that language is active.
+    const bits = [(FT().dispName ? FT().dispName(p) : p.name)];
     if (p.nick) bits.push('“' + p.nick + '”');
     bits.push(T('chip.gen', { g: p.gen }));
-    if (p.parent) bits.push('— ' + p.parent.name);
+    if (p.parent) bits.push('— ' + (FT().dispName ? FT().dispName(p.parent) : p.parent.name));
     return bits.join(' · ');
   }
 
@@ -260,7 +261,7 @@
       const branchIds = state.branches.get(u.id) || [];
       const branchNames = branchIds.map(id => {
         const p = FT().personById ? FT().personById(id) : null;
-        return p ? p.name : id.slice(0, 8);
+        return p ? (FT().dispName ? FT().dispName(p) : p.name) : id.slice(0, 8);
       });
       const me = FT().me && FT().me();
       const isMe = !!(me && me.id === u.id);
@@ -321,7 +322,7 @@
       '<input class="edit-input" type="search" id="bp_filter" placeholder="' + esc(T('admin.inviteBranchesSearch')) + '" autocomplete="off">' +
       '<div class="branch-list" id="bp_list">' +
       list.map(p =>
-        '<label class="check-row branch-item" data-name="' + esc(String(p.name).toLowerCase()) + '">' +
+        '<label class="check-row branch-item" data-name="' + esc(String(p.name).toLowerCase() + ' ' + String(p.name_ur || '').toLowerCase() + ' ' + String(p.name_hi || '').toLowerCase()) + '">' +
         '<input type="checkbox" value="' + esc(p.id) + '"' + (chosen.has(p.id) ? ' checked' : '') + '>' +
         '<span>' + esc(personOptionLabel(p)) + '</span></label>').join('') +
       '</div></div>';
@@ -490,7 +491,7 @@
       const p = FT().personById ? FT().personById(r.person_id) : null;
       const by = personName(r.requested_by);
       return '<div class="delreq-row ' + (r.status === 'pending' ? 'delreq-pending' : 'delreq-resolved') + '">' +
-        '<div><div class="delreq-person">' + esc(p ? p.name : r.person_id.slice(0, 8)) + '</div>' +
+        '<div><div class="delreq-person">' + esc(p ? (FT().dispName ? FT().dispName(p) : p.name) : r.person_id.slice(0, 8)) + '</div>' +
         '<div class="delreq-meta">' + esc(T('admin.requestBy', { name: by, when: fmtWhen(r.created_at) })) + '</div>' +
         '<div class="delreq-reason"><b>' + esc(T('admin.requestReason')) + ':</b> ' +
         esc(r.reason || T('admin.requestNoReason')) + '</div>' +
@@ -515,7 +516,7 @@
 
   function personName(id) {
     const p = FT().personById ? FT().personById(id) : null;
-    if (p) return p.name;
+    if (p) return (FT().dispName ? FT().dispName(p) : p.name);
     const u = state.users.find(x => x.id === id);
     if (u) return u.full_name || u.email;
     return id ? String(id).slice(0, 8) : '—';
@@ -526,7 +527,7 @@
     if (!r) return;
     const p = FT().personById ? FT().personById(r.person_id) : null;
     if (status === 'approved') {
-      const ok = window.confirm(T('admin.approveBody', { person: p ? p.name : r.person_id.slice(0, 8) }));
+      const ok = window.confirm(T('admin.approveBody', { person: p ? (FT().dispName ? FT().dispName(p) : p.name) : r.person_id.slice(0, 8) }));
       if (!ok) return;
     }
     state.busy = true;
@@ -630,7 +631,7 @@
     const userOpts = state.users.map(u => '<option value="' + esc(u.id) + '"' + (f.user === u.id ? ' selected' : '') + '>' +
       esc(u.full_name || u.email) + '</option>').join('');
     const personOpts = (FT().people ? FT().people() : []).map(p => '<option value="' + esc(p.id) + '"' + (f.person === p.id ? ' selected' : '') + '>' +
-      esc(p.name) + '</option>').join('');
+      esc((FT().dispName ? FT().dispName(p) : p.name)) + '</option>').join('');
     const actionOpts = ['insert', 'update', 'delete', 'restore', 'hard_delete']
       .map(a => '<option value="' + a + '"' + (f.action === a ? ' selected' : '') + '>' + esc(T('panel.action.' + a)) + '</option>').join('');
 

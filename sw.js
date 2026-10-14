@@ -13,7 +13,7 @@
    ===================================================================== */
 'use strict';
 
-const CACHE = 'family-tree-shell-v3';
+const CACHE = 'family-tree-shell-v4';
 const SHELL = [
   './',
   'index.html',

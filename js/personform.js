@@ -197,10 +197,11 @@
   /* ------------------------------ rendering ------------------------------ */
   // "Name — Gen 3 — parent: X" so two people with the same name stay tellable apart.
   function personOptionLabel(p) {
-    const bits = [p.name];
+    // Language-aware: shows the Urdu/Hindi spelling when that language is active.
+    const bits = [(FT().dispName ? FT().dispName(p) : p.name)];
     if (p.nick) bits.push('“' + p.nick + '”');
     bits.push(T('chip.gen', { g: p.gen }));
-    if (p.parent) bits.push('— ' + p.parent.name);
+    if (p.parent) bits.push('— ' + (FT().dispName ? FT().dispName(p.parent) : p.parent.name));
     return bits.join(' · ');
   }
   function labelForPersonId(id) {
@@ -240,8 +241,8 @@
     if (state.mode === 'addchild') {
       return '<div class="edit-field" data-field="parent">' +
         '<label class="edit-label">' + esc(T('edit.parentField')) + '</label>' +
-        '<input class="edit-input" type="text" value="' + esc(state.parent ? state.parent.name : '') + '" readonly>' +
-        '<div class="edit-hint">' + esc(T('edit.parentFixed', { name: state.parent ? state.parent.name : '' })) + '</div>' +
+        '<input class="edit-input" type="text" value="' + esc(state.parent ? (FT().dispName ? FT().dispName(state.parent) : state.parent.name) : '') + '" readonly>' +
+        '<div class="edit-hint">' + esc(T('edit.parentFixed', { name: state.parent ? (FT().dispName ? FT().dispName(state.parent) : state.parent.name) : '' })) + '</div>' +
         '</div>';
     }
     if (state.mode === 'addroot') {
@@ -254,7 +255,7 @@
     if (!admin) {
       return '<div class="edit-field" data-field="parent">' +
         '<label class="edit-label">' + esc(T('edit.parentField')) + '</label>' +
-        '<input class="edit-input" type="text" value="' + esc(state.person.parent ? state.person.parent.name : '') + '" readonly>' +
+        '<input class="edit-input" type="text" value="' + esc(state.person.parent ? (FT().dispName ? FT().dispName(state.person.parent) : state.person.parent.name) : '') + '" readonly>' +
         '<div class="edit-hint">' + esc(T('edit.parentAdminOnly')) + '</div>' +
         '</div>';
     }
@@ -293,8 +294,8 @@
     const mode = state.mode;
     const titleKey = DIALOG_TITLE[mode];
     const title = mode === 'edit'
-      ? T(titleKey, { name: state.person.name })
-      : T(titleKey, { name: state.parent ? state.parent.name : '' });
+      ? T(titleKey, { name: FT().dispName ? FT().dispName(state.person) : state.person.name })
+      : T(titleKey, { name: state.parent ? (FT().dispName ? FT().dispName(state.parent) : state.parent.name) : '' });
     const sub = mode === 'edit'
       ? T(DIALOG_SUB[mode], { gen: state.person.gen, gender: FT().genderLabel ? FT().genderLabel(state.person.gender) : '' })
       : T(DIALOG_SUB[mode]);
@@ -519,7 +520,7 @@
     if (!payload) return;
 
     const dup = duplicateOf(payload);
-    if (dup && !window.confirm(T('edit.dupWarn', { name: dup.name }))) return;
+    if (dup && !window.confirm(T('edit.dupWarn', { name: FT().dispName ? FT().dispName(dup) : dup.name }))) return;
 
     const client = FT().client && FT().client();
     if (!client) { FT().toast(T('save.notConnected')); return; }

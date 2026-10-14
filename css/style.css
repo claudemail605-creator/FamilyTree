@@ -598,13 +598,17 @@ input[readonly].edit-input { background: var(--bg); color: var(--ink-2); }
 .photo-thumb-empty { font-size: 11px; color: var(--ink-2); font-style: italic; padding: 6px; }
 .photo-row-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 
-/* nested dialog used inside the admin card */
-.modal-sub {
+/* nested dialog used inside the admin card.
+   NOTE: this is NOT the .modal-sub subtitle-text class used in dialog headers —
+   the wrapper here is appended as a direct child of a .modal overlay (see
+   js/admin.js dialog()). Keeping distinct names is what fixed the grey-dialog
+   bug: a `.modal-sub` <p> subtitle used to inherit this full-screen backdrop. */
+.modal-sub-wrap {
   position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
   padding: 18px; background: rgba(12, 18, 20, .45);
 }
 .admin-card { position: relative; }
-.modal-sub-dialog {
+.modal-sub-wrap .modal-sub-dialog {
   width: 100%; max-width: 560px; max-height: 88%; overflow-y: auto;
   background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
   box-shadow: var(--shadow-lg); padding: 18px 20px;
