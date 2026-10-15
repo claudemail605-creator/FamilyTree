@@ -2,6 +2,11 @@
    FAMILY TREE — Heritage design system (full rewrite)
    ══════════════════════════════════════════════════════════════════════ */
 
+/* ---------- 0. Touch gestures ---------- */
+#treeView {
+  touch-action: none;
+}
+
 /* ---------- 1. Tokens ---------- */
 :root {
   /* Surfaces */
