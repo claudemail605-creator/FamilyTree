@@ -649,14 +649,18 @@
     }, { passive: false });
 
     let drag = null, moved = false;
+    // Track whether the pointer started on a person node
+    let dragStartedOnNode = false;
     // Touch: two-finger pinch zoom, one-finger pan, double-tap zoom.
     const active = new Map();            // pointerId -> {x, y}
     let pinch = null;                     // {dist, cx, cy} while two fingers are down
     const pt = e => ({ x: e.clientX, y: e.clientY });
 
     st.addEventListener('pointerdown', e => {
-      if (e.target.closest('.node, .tg, .spouse-link, .stage-ctrls, .legend')) return;
-      active.set(e.pointerId, pt(e));
+      // Allow dragging to start from any node (person, spouse) or empty space.
+      // If we start on a node, mark it so we can distinguish tap from drag later.
+      const startedOnNode = e.target.closest('.node, .tg, .spouse-link');
+      dragStartedOnNode = !!startedOnNode;
       if (active.size === 2) {
         // A second finger down turns the drag into a pinch. Position mid-gesture
         // so the tree does not jump when the fingers move apart.
@@ -669,7 +673,12 @@
         st.classList.add('dragging');
         return;
       }
-      drag = { x: e.clientX, y: e.clientY, tx: S.tx, ty: S.ty }; moved = false; st.classList.add('dragging'); st.setPointerCapture(e.pointerId);
+      // If started on a node, we will allow dragging; if on empty space, also allow.
+      // The drag threshold will determine tap vs drag.
+      drag = { x: e.clientX, y: e.clientY, tx: S.tx, ty: S.ty }; moved = false;
+      dragStartedOnNode = !!e.target.closest('.node, .tg, .spouse-link');
+      active.set(e.pointerId, pt(e));
+      st.classList.add('dragging');
     });
 
     st.addEventListener('pointermove', e => {
@@ -685,7 +694,7 @@
       }
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+      if (Math.hypot(dx, dy) > 10) moved = true;
       S.tx = drag.tx + dx; S.ty = drag.ty + dy; applyTransform();
     });
     const end = (e) => {
@@ -693,7 +702,27 @@
       if (active.size < 2) pinch = null;
       if (!active.size) { drag = null; st.classList.remove('dragging'); }
     };
-    st.addEventListener('pointerup', e => { if (drag && !moved && !e.target.closest('.node, .tg')) closePanel(); end(e); });
+    // Drag: if movement exceeds threshold, it's a drag (don't click).
+    // If movement is below threshold, treat as tap (open person details).
+    st.addEventListener('pointerup', e => {
+      if (active.has(e.pointerId)) {
+        // If we started on a node and movement was minimal, this is a tap.
+        // Otherwise it's a drag.
+        if (dragStartedOnNode && !moved) {
+          // Tap on a person — open details, but only if not prevented by drag.
+          const n = e.target.closest('.node');
+          if (n && !e.target.closest('[data-act]')) {
+            // Prevent default to avoid scrolling, then select the person.
+            e.preventDefault();
+            const id = n.dataset.id;
+            if (id) select(id);
+          }
+        }
+        end(e);
+      } else {
+        end(e);
+      }
+    });
     st.addEventListener('pointercancel', end);
     // Double-click / double-tap zooms in at the tap point.
     st.addEventListener('dblclick', e => {
