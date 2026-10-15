@@ -86,6 +86,7 @@
 
   const TABS = [
     ['users', 'admin.tab.users'],
+    ['branches', 'admin.tab.branches'],
     ['requests', 'admin.tab.requests'],
     ['deleted', 'admin.tab.deleted'],
     ['activity', 'admin.tab.activity'],
@@ -124,6 +125,7 @@
 
   function loadTab(force) {
     if (state.tab === 'users') return loadUsers(force);
+    if (state.tab === 'branches') return loadBranchProgress();
     if (state.tab === 'requests') return loadRequests();
     if (state.tab === 'deleted') return loadDeleted();
     if (state.tab === 'activity') return loadActivity();
@@ -358,7 +360,9 @@
         '<option value="editor">' + esc(T('admin.inviteRoleEditor')) + '</option>' +
         '<option value="admin">' + esc(T('admin.inviteRoleAdmin')) + '</option></select></div>' +
         branchPickerHtml([]) +
-        '<label class="check-row"><input type="checkbox" id="iv_mail" checked><span>' + esc(T('admin.inviteSendMail')) + '</span></label>',
+        '<label class="check-row"><input type="checkbox" id="iv_mail" checked><span>' + esc(T('admin.inviteSendMail')) + '</span></label>' +
+        // Live review box: the assignment is spelled out before the send button.
+        '<div class="branch-note" id="iv_review"></div>',
       onSubmit: async (form) => {
         const email = val(form, '#iv_email');
         const name = val(form, '#iv_name');
@@ -375,6 +379,29 @@
       }
     });
     wireBranchFilter(overlay.querySelector('.modal-sub-dialog'));
+    // Keep the review current with everything the admin has picked so far.
+    const wrap = overlay.querySelector('.modal-sub-wrap');
+    const reviewBox = wrap && wrap.querySelector('#iv_review');
+    if (reviewBox) {
+      const paintReview = () => {
+        const name = val(wrap, '#iv_name') || '…';
+        const email = val(wrap, '#iv_email') || '…';
+        const role = val(wrap, '#iv_role') || 'editor';
+        const roleLabel = role === 'admin' ? T('admin.inviteRoleAdmin') : T('admin.inviteRoleEditor');
+        const branchNames = [...wrap.querySelectorAll('#bp_list input[type=checkbox]')].filter(c => c.checked)
+          .map(c => {
+            const p = FT().personById ? FT().personById(c.value) : null;
+            return p ? (FT().dispName ? FT().dispName(p) : p.name) : c.value.slice(0, 8);
+          });
+        reviewBox.innerHTML =
+          '<b>' + esc(T('branch.reviewTitle')) + '</b><br>' +
+          esc(T('branch.reviewLine', { name: name, email: email, role: roleLabel, n: branchNames.length })) +
+          (branchNames.length ? '<br>' + esc(branchNames.join(' · ')) : '<br><i>' + esc(T('branch.reviewNoBranches')) + '</i>');
+      };
+      paintReview();
+      wrap.querySelector('#subform').addEventListener('input', paintReview);
+      wrap.querySelector('#subform').addEventListener('change', paintReview);
+    }
   }
 
   function openEditUser(u) {
@@ -466,6 +493,86 @@
         FT().toast(T('admin.changeFailed', { msg: (e2 && e2.message) || String(e2) }));
       }
     }
+  }
+
+  /* ------------------------- branch progress (real data) ------------------------- */
+  // A simple progress view for assigned branches. Every number is computed live
+  // from the database-backed client model + branch_access/profiles rows — the
+  // same definitions the "My Family Branch" workspace shows its editor, so an
+  // admin sees what the editor sees. Nothing is hard-coded or estimated.
+  async function loadBranchProgress(force) {
+    const c = client();
+    if (!c) { say('<div class="admin-empty">' + esc(T('save.notConnected')) + '</div>'); return; }
+    say('<div class="admin-empty">' + esc(T('generic.loading')) + '</div>');
+    try {
+      if (!state.users.length || force) {
+        const { data, error } = await c.from('profiles').select('*').order('full_name', { ascending: true });
+        if (error) throw error;
+        state.users = data || [];
+      }
+      if (!state.branches.size || force) {
+        const { data, error } = await c.from('branch_access').select('user_id, person_id');
+        if (error) throw error;
+        state.branches = new Map();
+        (data || []).forEach(r => {
+          const list = state.branches.get(r.user_id) || [];
+          list.push(r.person_id);
+          state.branches.set(r.user_id, list);
+        });
+      }
+      if (force || !Object.keys(state.lastSignIn).length) await fetchLastSignIn();
+      renderBranchProgress();
+    } catch (err) {
+      say('<div class="admin-empty">' + esc(T('admin.loadFailed', { msg: (err && err.message) || String(err) })) + '</div>');
+    }
+  }
+
+  function renderBranchProgress() {
+    const f = FT();
+    const rows = [];
+    state.users.forEach(u => {
+      if (u.role !== 'editor') return;                 // admins have no assignment
+      const branchIds = state.branches.get(u.id) || [];
+      if (!branchIds.length) return;                   // nothing assigned yet
+      let total = 0, done = 0, missingFields = 0;
+      const anchors = [];
+      const seen = new Set();
+      branchIds.forEach(pid => {
+        if (!f.branchPeople) return;
+        f.branchPeople(pid).forEach(p => {
+          if (seen.has(p.id)) return;
+          seen.add(p.id);
+          total++;
+          const comp = f.completeness ? f.completeness(p) : { missing: [] };
+          if (!comp.missing.length) done++; else missingFields += comp.missing.length;
+        });
+        const ap = f.personById ? f.personById(pid) : null;
+        if (ap) anchors.push(f.dispName ? f.dispName(ap) : ap.name);
+      });
+      const signedIn = state.functionMissing ? null : !!state.lastSignIn[u.id];
+      const status = signedIn === null ? T('admin.unknown')
+        : (signedIn ? T('admin.statusSignedIn') : T('admin.statusNotSignedIn'));
+      const activeChip = u.active
+        ? '<span class="admin-status-chip seen">' + esc(T('admin.statusActive')) + '</span>'
+        : '<span class="admin-status-chip pending">' + esc(T('admin.inactiveTag')) + '</span>';
+      rows.push(
+        '<div class="branch-progress-row">' +
+        '<div class="branch-progress-main">' +
+        '<div class="branch-progress-name">' + esc(u.full_name || u.email) + activeChip + '</div>' +
+        '<div class="branch-progress-meta">' + esc(u.email) + '</div>' +
+        '<div class="branch-progress-meta"><b>' + esc(T('admin.branchAnchor')) + ':</b> ' +
+        (anchors.length ? esc(anchors.join(', ')) : '—') + '</div>' +
+        '<div class="branch-progress-meta"><b>' + esc(T('admin.branchSignIn')) + ':</b> ' + esc(status) + '</div>' +
+        '</div>' +
+        '<div class="branch-progress-stats">' +
+        '<span>' + esc(T('admin.branchPeople')) + ': <b>' + total + '</b></span>' +
+        '<span class="ok">' + esc(T('admin.branchComplete')) + ': <b>' + done + '</b></span>' +
+        '<span class="miss">' + esc(T('admin.branchMissing')) + ': <b>' + (total - done) + '</b></span>' +
+        '</div></div>');
+    });
+    say(
+      '<p class="admin-hint">' + esc(T('admin.branchesSub')) + '</p>' +
+      (rows.length ? rows.join('') : '<div class="admin-empty">' + esc(T('admin.branchesNone')) + '</div>'));
   }
 
   /* --------------------------- deletion requests --------------------------- */

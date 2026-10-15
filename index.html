@@ -15,9 +15,13 @@
   <meta name="apple-mobile-web-app-title" content="Family Tree">
   <!-- Fonts for Urdu and Hindi are loaded only when that language is chosen
        (see loadFonts() in js/i18n.js); the preconnects just warm the connection. -->
+  <!-- Design-system fonts: Fraunces (display serif) + Inter (interface).
+       Loaded once for the whole app; Urdu/Hindi fonts join when those
+       languages are chosen (see loadFonts() in js/i18n.js). -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
   <header class="topbar">
@@ -40,6 +44,11 @@
       <button data-view="table" role="tab" data-i18n>view.table</button>
     </div>
 
+    <!-- My Family Branch: editors with an assigned branch (and admins, who can open
+         any of them). The workspace explains each invitation. js/branch.js shows it. -->
+    <button class="btn nav-branch" id="btnBranch" hidden>
+      <span data-i18n>branch.nav</span>
+    </button>
     <!-- Admins only: the spreadsheet export sits in the top bar. Importing an .xlsx is
          in the admin screen (Admin → Import and backup). -->
     <button class="btn ghost" id="btnExport" title="Export to Excel" data-i18n="export.title" data-i18n-attr="title" hidden>
@@ -60,8 +69,17 @@
        active user is signed in. -->
   <div id="authGate" class="auth-gate" hidden></div>
 
+  <!-- Tap the shaded area outside the drawer to close it (mobile). -->
+  <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+
   <div class="layout">
     <aside class="sidebar" id="sidebar">
+      <button class="icon-btn drawer-close only-mobile" id="btnDrawerClose" data-i18n="panel.close" data-i18n-attr="aria-label" aria-label="Close filters">✕</button>
+      <!-- Phones: the top-bar "My branch" is hidden at this width, so the workspace
+           keeps a permanent entry point at the top of the filter drawer. -->
+      <button class="btn nav-branch-mobile" id="btnBranchMobile" hidden>
+        <span data-i18n>branch.nav</span>
+      </button>
       <div class="side-head">
         <h2 data-i18n>sidebar.filters</h2>
         <button class="link" id="btnReset" data-i18n>btnReset</button>
@@ -150,6 +168,10 @@
       <section id="tableView" class="table-wrap" hidden>
         <table id="table"></table>
       </section>
+
+      <!-- My Family Branch — the guided workspace invited editors land on
+           (js/branch.js). A dedicated screen, not a filtered copy of the tree. -->
+      <section id="branchView" class="branch-view" hidden></section>
     </main>
 
     <aside class="panel" id="panel" aria-live="polite" hidden></aside>
@@ -173,5 +195,6 @@
   <script src="js/admin.js"></script>
   <script src="js/extras.js"></script>
   <script src="js/app.js"></script>
+  <script src="js/branch.js"></script>
 </body>
 </html>

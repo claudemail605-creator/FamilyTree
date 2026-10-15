@@ -13,7 +13,7 @@
    ===================================================================== */
 'use strict';
 
-const CACHE = 'family-tree-shell-v4';
+const CACHE = 'family-tree-shell-v5';
 const SHELL = [
   './',
   'index.html',
@@ -27,6 +27,7 @@ const SHELL = [
   'js/admin.js',
   'js/extras.js',
   'js/app.js',
+  'js/branch.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

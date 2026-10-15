@@ -84,6 +84,10 @@
   // Supabase caps a single response at 1000 rows, so page through. The sort order must
   // be unique (dob + id is) or rows can repeat or vanish between pages.
   const PAGE = 1000;
+
+  // Supabase caps a single response at 1000 rows, so page through. The sort order must
+  // be unique (dob + id is) or rows can repeat or vanish between pages.
+    // Supabase caps a single response at 1000 rows, so page through.
   async function fetchAllPeople(admin) {
     const out = [];
     for (let from = 0; ; from += PAGE) {
@@ -350,13 +354,32 @@
     $('#viewSwitch').addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
       S.view = b.dataset.view;
+      // Leaving tree/table while the branch workspace is open closes it cleanly so
+      // the two entry points can never fight over what is on screen.
+      if (window.Branch && Branch.isOpen()) Branch.goBackToTree();
       [...$('#viewSwitch').children].forEach(x => x.classList.toggle('on', x === b));
       $('#treeView').hidden = S.view !== 'tree';
       $('#tableView').hidden = S.view !== 'table';
       refresh(true);
     });
     $('#btnReset').onclick = resetFilters;
-    $('#btnFilters').onclick = () => $('#sidebar').classList.toggle('open');
+    // Mobile filter drawer: the ☰ button slides the sidebar in over a dimmed
+    // backdrop; the backdrop, the ✕ in the drawer and a successful filter action
+    // close it. (The old bare class toggle left the drawer stuck on small bug.)
+    const drawer = {
+      open() { $('#sidebar').classList.add('open'); const b = $('#drawerBackdrop'); if (b) b.hidden = false; },
+      close() { $('#sidebar').classList.remove('open'); const b = $('#drawerBackdrop'); if (b) b.hidden = true; },
+      toggle() { this.isOpen() ? this.close() : this.open(); },
+      isOpen() { return $('#sidebar').classList.contains('open'); }
+    };
+    $('#btnFilters').onclick = () => drawer.toggle();
+    const backdrop = $('#drawerBackdrop');
+    if (backdrop) backdrop.onclick = () => drawer.close();
+    const drawerClose = $('#btnDrawerClose');
+    if (drawerClose) drawerClose.onclick = () => drawer.close();
+    ['#fStatus', '#fBranch', '#fPob', '#fQual', '#fHas'].forEach(sel => {
+      $(sel).addEventListener('change', () => { if (drawer.isOpen()) drawer.close(); });
+    });
     $('#btnTheme').onclick = () => {
       const r = document.documentElement;
       const next = r.dataset.theme === 'dark' ? 'light' : 'dark';
@@ -383,6 +406,7 @@
       $('#btnAdmin').hidden = !admin;
       $('#btnExport').hidden = !admin;     // exporting the whole tree is admin-only
       $('#deletedField').hidden = !admin;  // so is looking at soft-deleted people
+      if (window.Branch) Branch.updateNav();
       if (admin) startLiveUpdates(); else stopLiveUpdates();
       if (adminPanelOpen() && !admin) closeAdminPanel();
       reloadData();
@@ -404,6 +428,9 @@
     if (Auth) Auth._callbacks.onProfileChange = (prof) => {
       if (prof && prof.language) I18n.setLanguage(prof.language);
       onAuthStateSettled();
+      // The guided "My Family Branch" workspace (js/branch.js) picks its destination
+      // from the trusted profile + branch_access here — never from the URL.
+      if (window.Branch) Branch.onProfileReady(prof);
     };
     // Initialise i18n from the profile if known, else from localStorage.
     if (Auth && Auth.profile && Auth.profile.language) I18n.setLanguage(Auth.profile.language);
@@ -622,19 +649,58 @@
     }, { passive: false });
 
     let drag = null, moved = false;
+    // Touch: two-finger pinch zoom, one-finger pan, double-tap zoom.
+    const active = new Map();            // pointerId -> {x, y}
+    let pinch = null;                     // {dist, cx, cy} while two fingers are down
+    const pt = e => ({ x: e.clientX, y: e.clientY });
+
     st.addEventListener('pointerdown', e => {
       if (e.target.closest('.node, .tg, .spouse-link, .stage-ctrls, .legend')) return;
+      active.set(e.pointerId, pt(e));
+      if (active.size === 2) {
+        // A second finger down turns the drag into a pinch. Position mid-gesture
+        // so the tree does not jump when the fingers move apart.
+        const [a, b] = [...active.values()];
+        drag = null;
+        pinch = {
+          dist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+          cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2
+        };
+        st.classList.add('dragging');
+        return;
+      }
       drag = { x: e.clientX, y: e.clientY, tx: S.tx, ty: S.ty }; moved = false; st.classList.add('dragging'); st.setPointerCapture(e.pointerId);
     });
+
     st.addEventListener('pointermove', e => {
+      if (active.has(e.pointerId) && pinch && active.size >= 2) {
+        active.set(e.pointerId, pt(e));
+        const [a, b] = [...active.values()];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+        const r = st.getBoundingClientRect();
+        zoomAt(dist / pinch.dist, pinch.cx - r.left, pinch.cy - r.top);
+        pinch.dist = dist;
+        moved = true;
+        return;
+      }
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
       S.tx = drag.tx + dx; S.ty = drag.ty + dy; applyTransform();
     });
-    const end = () => { drag = null; st.classList.remove('dragging'); };
-    st.addEventListener('pointerup', e => { if (drag && !moved && !e.target.closest('.node, .tg')) closePanel(); end(); });
+    const end = (e) => {
+      active.delete(e && e.pointerId);
+      if (active.size < 2) pinch = null;
+      if (!active.size) { drag = null; st.classList.remove('dragging'); }
+    };
+    st.addEventListener('pointerup', e => { if (drag && !moved && !e.target.closest('.node, .tg')) closePanel(); end(e); });
     st.addEventListener('pointercancel', end);
+    // Double-click / double-tap zooms in at the tap point.
+    st.addEventListener('dblclick', e => {
+      if (e.target.closest('.node, .tg, .stage-ctrls, .legend')) return;
+      const r = st.getBoundingClientRect();
+      zoomAt(1.3, e.clientX - r.left, e.clientY - r.top);
+    });
 
     // Cards: click (details), toggle button (collapse), hover (tooltip)
     world.addEventListener('click', e => {
