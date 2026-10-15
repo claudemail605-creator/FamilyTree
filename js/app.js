@@ -689,8 +689,6 @@
         const r = st.getBoundingClientRect();
         zoomAt(dist / pinch.dist, pinch.cx - r.left, pinch.cy - r.top);
         pinch.dist = dist;
-        moved = true;
-        return;
       }
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
