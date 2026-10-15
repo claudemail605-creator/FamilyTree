@@ -743,7 +743,15 @@
         if (before && after) { S.tx -= (after.x + after.w / 2 - before.x - before.w / 2) * S.scale; S.ty -= (after.y - before.y) * S.scale; applyTransform(); }
         return;
       }
-      const n = e.target.closest('.node'); if (n) select(n.dataset.id);
+      // Select the person whose card was clicked. Use the node's data-id attribute.
+      // This ensures the correct person is selected whether clicking a main person card
+      // or a spouse card attached to that person.
+      const n = e.target.closest('.node');
+      if (n) {
+        // If the click was on a spouse card (has data-spouse attribute),
+        // still select using the card's data-id which is the person's own ID.
+        select(n.dataset.id);
+      }
     });
     world.addEventListener('mouseover', e => {
       const n = e.target.closest('.node'); if (!n || e.target.closest('.tg')) return;
