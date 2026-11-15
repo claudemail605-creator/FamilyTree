@@ -4,3 +4,6 @@ data/
 docs/
 database/
 supabase/
+# Local-only env files: the browser config lives in js/config.js, so nothing here
+# is needed for a deploy. Without this a CLI deploy publishes .env.local.
+.env*
