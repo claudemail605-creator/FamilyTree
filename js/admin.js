@@ -45,6 +45,7 @@
     importRows: null,
     importProblems: [],
     importFile: null,
+    signInTried: false,     // the Edge Function is only asked once per session
     busy: false
   };
 
@@ -63,7 +64,7 @@
       overlay.id = 'adminModal';
       document.body.appendChild(overlay);
       document.documentElement.classList.add('modal-open');
-      overlay.addEventListener('mousedown', e => { if (e.target === overlay && !state.busy) close(); });
+      overlay.addEventListener('mousedown', e => { if (e.target === overlay) close(); });
       window.addEventListener('keydown', onKeydown, true);
     }
     overlay.hidden = false;
@@ -73,8 +74,10 @@
 
   function close() {
     if (!overlay) { state.open = false; return; }
-    if (state.busy) return;
+    // Closing is always allowed, even mid-load: a slow request must never trap
+    // the user inside the panel. Late renders find an empty overlay and no-op.
     state.open = false;
+    state.busy = false;
     overlay.hidden = true;
     overlay.innerHTML = '';
     document.documentElement.classList.remove('modal-open');
@@ -111,7 +114,8 @@
       TABS.map(([k, label]) =>
         '<button type="button" role="tab" data-tab="' + k + '" class="' + (state.tab === k ? 'on' : '') + '">' + esc(T(label)) + '</button>').join('') +
       '</div>' +
-      '<div class="modal-body admin-body" id="ad_body"><div class="admin-empty">' + esc(T('generic.loading')) + '</div></div>' +
+      '<div class="modal-body admin-body" id="ad_body"><div class="admin-loading" role="status">' +
+      '<span class="admin-spin" aria-hidden="true"></span><span>' + esc(T('generic.loading')) + '</span></div></div>' +
       '</div>';
     overlay.querySelector('#ad_close').onclick = close;
     overlay.querySelector('#ad_reload').onclick = () => loadTab(true);
@@ -127,12 +131,31 @@
   function body() { return overlay.querySelector('#ad_body'); }
   function say(html) { const b = body(); if (b) b.innerHTML = html; }
 
+  // A loading state has to look like one. It used to be a single grey italic
+  // line in the corner of a 1000px-wide empty dialog, which reads as "blank".
+  function loading(msgKey) {
+    say('<div class="admin-loading" role="status" aria-live="polite">' +
+      '<span class="admin-spin" aria-hidden="true"></span>' +
+      '<span>' + esc(T(msgKey || 'generic.loading')) + '</span></div>');
+  }
+
   async function loadTab(force) {
     // A tab that throws must never leave the panel silently blank: the error is
     // shown inside the real tab body, with a working Retry button.
+    const tab = state.tab;
     try {
       await loadTabInner(force);
+      // Belt and braces: if a tab resolved without writing anything (a slow
+      // request that came back after the user moved on, a render that bailed),
+      // say so instead of leaving an unexplained white area.
+      if (state.tab === tab && body() && !body().textContent.trim()) {
+        say('<div class="admin-empty">' + esc(T('admin.emptyBody')) +
+          '<div style="margin-top:10px"><button type="button" class="btn sm primary" id="tab_empty_retry">' + esc(T('generic.retry')) + '</button></div></div>');
+        const eb = overlay.querySelector('#tab_empty_retry');
+        if (eb) eb.onclick = () => loadTab(true);
+      }
     } catch (err) {
+      if (state.tab !== tab) return;   // the user already moved to another tab
       say('<div class="admin-empty">' +
         esc(T('generic.loadFailed', { msg: (err && err.message) || String(err) })) +
         '<div style="margin-top:10px"><button type="button" class="btn sm primary" id="tab_retry">' + esc(T('generic.retry')) + '</button></div>' +
@@ -158,7 +181,7 @@
     const c = client();
     if (!c) { say('<div class="admin-empty">' + esc(T('save.notConnected')) + '</div>'); return; }
     state.busy = true;
-    say('<div class="admin-empty">' + esc(T('generic.loading')) + '</div>');
+    loading();
     try {
       if (!state.users.length) {
         const { data, error } = await c.from('profiles').select('*');
@@ -182,8 +205,10 @@
         state.healthRows = data || [];
         state.healthStamp = Date.now();
       }
+      if (state.tab !== 'health' || !state.open) return;   // the user moved on
       renderHealth();
     } catch (err) {
+      if (state.tab !== 'health' || !state.open) return;   // the user moved on
       say('<div class="admin-empty">' + esc(T('generic.loadFailed', { msg: (err && err.message) || String(err) })) + '</div>');
     } finally {
       state.busy = false;
@@ -302,23 +327,50 @@
     return data || {};
   }
 
-  async function fetchLastSignIn() {
-    try {
-      const data = await fn('list');
-      (data.users || []).forEach(u => { state.lastSignIn[u.id] = u.last_sign_in_at || null; });
-      state.functionMissing = false;
-    } catch (e) {
-      state.functionMissing = true;
-    }
+  // Browsers do not time out a hanging fetch on their own; a stalled Edge
+  // Function must not keep the panel in "Loading…" indefinitely.
+  function withTimeout(promise, ms) {
+    let timer;
+    const cutoff = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('timeout')), ms);
+    });
+    return Promise.race([promise, cutoff]).finally(() => clearTimeout(timer));
+  }
+
+  // Last-seen times come from the `admin-users` Edge Function, which cold-starts
+  // in ~3 s. It is optional: when it is slow or missing the accounts still render
+  // with "unknown" in that one column, and it is only asked again on Reload.
+  function fetchLastSignIn(force) {
+    if (!force && (state.signInTried || Object.keys(state.lastSignIn).length)) return Promise.resolve();
+    if (signInPromise) return signInPromise;
+    const p = signInPromise = (async () => {
+      try {
+        const data = await withTimeout(fn('list'), 6000);
+        (data.users || []).forEach(u => { state.lastSignIn[u.id] = u.last_sign_in_at || null; });
+        state.functionMissing = false;
+      } catch (e) {
+        state.functionMissing = true;
+      } finally {
+        state.signInTried = true;
+      }
+    })();
+    p.then(() => { if (signInPromise === p) signInPromise = null; });
+    return p;
   }
 
   /* -------------------------------- users -------------------------------- */
-  async function loadUsers(force) {
+  // Accounts + branch assignments are shared by several tabs and warmed by
+  // prefetch() as soon as an admin signs in. Clearing the panel must never mean
+  // waiting on the network again, and two callers must not double-fetch.
+  let usersPromise = null;
+  let signInPromise = null;
+
+  function loadUserData(force) {
+    if (!force && state.users.length) return Promise.resolve();
+    if (!force && usersPromise) return usersPromise;
     const c = client();
-    if (!c) { say('<div class="admin-empty">' + esc(T('save.notConnected')) + '</div>'); return; }
-    state.busy = true;
-    say('<div class="admin-empty">' + esc(T('admin.usersLoading')) + '</div>');
-    try {
+    if (!c) return Promise.reject(new Error(T('save.notConnected')));
+    const p = usersPromise = (async () => {
       const [profRes, branchRes] = await Promise.all([
         c.from('profiles').select('*').order('created_at', { ascending: true }),
         c.from('branch_access').select('user_id, person_id')
@@ -332,9 +384,47 @@
         list.push(r.person_id);
         state.branches.set(r.user_id, list);
       });
-      if (force || !Object.keys(state.lastSignIn).length) await fetchLastSignIn();
+    })();
+    p.catch(() => {}).then(() => { if (usersPromise === p) usersPromise = null; });
+    return p;
+  }
+
+  // Draw the panel from data we already hold before touching the network.
+  function prefetch() {
+    if (!(FT().isAdmin && FT().isAdmin())) return;
+    const run = () => {
+      loadUserData(false).catch(() => {});
+      fetchLastSignIn(false);
+    };
+    if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 4000 });
+    else setTimeout(run, 1200);
+  }
+
+  async function loadUsers(force) {
+    if (!client()) { say('<div class="admin-empty">' + esc(T('save.notConnected')) + '</div>'); return; }
+    state.busy = true;
+    if (!state.users.length) loading('admin.usersLoading');
+    try {
+      await loadUserData(force);
+      if (state.tab !== 'users' || !state.open) return;   // the user moved on
       renderUsers();
+      // Keep the search box usable: the re-render after the sign-in lookup
+      // rebuilds the input, so carry the caret across it.
+      const ae = document.activeElement;
+      const keepQ = !!(ae && ae.id === 'uf_q');
+      const sel = keepQ ? { s: ae.selectionStart, e: ae.selectionEnd } : null;
+      await fetchLastSignIn(force);
+      if (state.tab !== 'users' || !state.open) return;
+      renderUsers();
+      if (keepQ) {
+        const q = overlay.querySelector('#uf_q');
+        if (q) {
+          q.focus();
+          try { q.setSelectionRange(sel.s, sel.e); } catch (e) { /* not a text input any more */ }
+        }
+      }
     } catch (err) {
+      if (state.tab !== 'users' || !state.open) return;
       say('<div class="admin-empty">' + esc(T('admin.usersFailed', { msg: (err && err.message) || String(err) })) + '</div>');
     } finally {
       state.busy = false;
@@ -700,7 +790,7 @@
   async function loadBranchProgress(force) {
     const c = client();
     if (!c) { say('<div class="admin-empty">' + esc(T('save.notConnected')) + '</div>'); return; }
-    say('<div class="admin-empty">' + esc(T('generic.loading')) + '</div>');
+    loading();
     try {
       if (!state.users.length || force) {
         const { data, error } = await c.from('profiles').select('*').order('full_name', { ascending: true });
@@ -717,9 +807,16 @@
           state.branches.set(r.user_id, list);
         });
       }
-      if (force || !Object.keys(state.lastSignIn).length) await fetchLastSignIn();
+      // The optional sign-in lookup must not hold the report hostage: draw with
+      // what we already have and refresh once the Edge Function answers.
+      const pending = fetchLastSignIn(force);
+      if (state.tab !== 'branches' || !state.open) return;   // the user moved on
       renderBranchProgress();
+      pending.then(() => {
+        if (state.tab === 'branches' && state.open) renderBranchProgress();
+      }).catch(() => { /* the optional refresh must never surface an error */ });
     } catch (err) {
+      if (state.tab !== 'branches' || !state.open) return;
       say('<div class="admin-empty">' + esc(T('generic.loadFailed', { msg: (err && err.message) || String(err) })) + '</div>');
     }
   }
@@ -776,14 +873,16 @@
   async function loadRequests() {
     const c = client();
     if (!c) { say('<div class="admin-empty">' + esc(T('save.notConnected')) + '</div>'); return; }
-    say('<div class="admin-empty">' + esc(T('generic.loading')) + '</div>');
+    loading();
     try {
       const { data, error } = await c.from('deletion_requests')
         .select('*').order('created_at', { ascending: false }).limit(200);
       if (error) throw error;
       state.requests = data || [];
+      if (state.tab !== 'requests' || !state.open) return;   // the user moved on
       renderRequests();
     } catch (err) {
+      if (state.tab !== 'requests' || !state.open) return;
       say('<div class="admin-empty">' + esc(T('generic.loadFailed', { msg: (err && err.message) || String(err) })) + '</div>');
     }
   }
@@ -859,7 +958,7 @@
   async function loadDeleted() {
     const c = client();
     if (!c) { say('<div class="admin-empty">' + esc(T('save.notConnected')) + '</div>'); return; }
-    say('<div class="admin-empty">' + esc(T('generic.loading')) + '</div>');
+    loading();
     try {
       const { data, error } = await c.from('people')
         .select('id, full_name, gender, parent_id, updated_at, legacy_id')
@@ -868,8 +967,10 @@
         .limit(500);
       if (error) throw error;
       state.deleted = data || [];
+      if (state.tab !== 'deleted' || !state.open) return;   // the user moved on
       renderDeleted();
     } catch (err) {
+      if (state.tab !== 'deleted' || !state.open) return;
       say('<div class="admin-empty">' + esc(T('generic.loadFailed', { msg: (err && err.message) || String(err) })) + '</div>');
     }
   }
@@ -909,7 +1010,7 @@
   async function loadActivity() {
     const c = client();
     if (!c) { say('<div class="admin-empty">' + esc(T('save.notConnected')) + '</div>'); return; }
-    say('<div class="admin-empty">' + esc(T('generic.loading')) + '</div>');
+    loading();
     const f = state.activityFilter;
     try {
       let q = c.from('audit_log')
@@ -924,8 +1025,10 @@
       const { data, error } = await q;
       if (error) throw error;
       state.activity = data || [];
+      if (state.tab !== 'activity' || !state.open) return;   // the user moved on
       renderActivity();
     } catch (err) {
+      if (state.tab !== 'activity' || !state.open) return;
       say('<div class="admin-empty">' + esc(T('generic.loadFailed', { msg: (err && err.message) || String(err) })) + '</div>');
     }
   }
@@ -1258,5 +1361,5 @@
     }
   }
 
-  window.Admin = { open: open, close: close, isOpen: isOpen };
+  window.Admin = { open: open, close: close, isOpen: isOpen, prefetch: prefetch };
 })();

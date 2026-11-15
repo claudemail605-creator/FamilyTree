@@ -454,6 +454,10 @@
       if (window.Branch) Branch.updateNav();
       if (admin) startLiveUpdates(); else stopLiveUpdates();
       if (adminPanelOpen() && !admin) closeAdminPanel();
+      // Warm the admin panel in the background: by the time the gear is clicked
+      // the accounts are already in memory, so the panel opens populated instead
+      // of showing a loading state (the Edge Function cold-starts in ~3 s).
+      if (admin && window.Admin && Admin.prefetch) Admin.prefetch();
       reloadData();
       // Re-draw the open panel: it may have been rendered before branch_access arrived,
       // which is what decides whether an editor sees the edit buttons.
@@ -1911,6 +1915,11 @@
     state: () => S,
     personById: id => S.byId.get(id) || null,
     kidsOf: id => S.kids.get(id) || [],
+    // The branch maths lives in js/branch.js, which loads after this file, so it
+    // is resolved lazily. Admin's branch-progress tab deliberately uses the very
+    // same definition the editor's workspace does - the admin then sees exactly
+    // what the editor sees, instead of a second, drifting implementation.
+    branchPeople: id => (window.Branch && window.Branch.branchPeople ? window.Branch.branchPeople(id) : []),
     descendantsOf: descendantsOf,
     FIELD_LABELS: FIELD_LABELS,
     fieldLabel: fieldLabel,
