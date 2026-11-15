@@ -230,7 +230,10 @@
     // Spouse linkage: spouse_name is TEXT in the database, but when the married-in
     // person also has their own record (anywhere in the tree), resolve it so that
     // clicking the spouse card opens THAT person's own record — not the partner's.
-    const norm = s => String(s || '').trim().toLowerCase().replace(/s+/g, ' ');
+    // \s+ collapses runs of whitespace, so "Syed  Ahmed" and "syed ahmed" are the
+    // same person. (This was written as /s+/, which silently ate the letter "s"
+    // instead of whitespace and only matched names that already agreed exactly.)
+    const norm = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
     const byName = new Map(rows.map(p => [norm(p.name), p]));
     S.spouseLink = new Map();   // ownerId -> canonical spouse person id (when one exists)
     rows.forEach(p => {
@@ -614,7 +617,7 @@
       const canAdd = canEditAny && Auth.canEditPerson(id);
       const tg = nk ? `<button class="tg" data-tg="${esc(id)}" style="left:${ox + v.x + v.w / 2}px;top:${oy + v.y + NH - 11}px" title="${esc(S.collapsed.has(id) ? I18n.t('tg.expand') : I18n.t('tg.collapse'))}">${S.collapsed.has(id) ? '+ ' + nk : '−'}</button>` : '';
       html += `<div class="${cls.join(' ')}" data-id="${esc(id)}" style="left:${ox + v.x}px;top:${oy + v.y}px;width:${NW}px;height:${NH}px">
-        <div class="avatar">${esc(p._initials)}${p.photo_path ? `<img class="node-photo" data-card-photo="${esc(p.photo_path)}" alt="" hidden>` : ''}</div>
+        <div class="avatar">${esc(p._initials)}${p.photo_path ? `<img class="node-photo" data-card-photo="${esc(p.photo_path)}" alt="" draggable="false" hidden>` : ''}</div>
         <div class="meta"><div class="nm">${esc(dispName(p))}</div>${p.nick ? `<div class="nk">“${esc(p.nick)}”</div>` : ''}</div>
         ${(p.dod || p.is_deleted) ? `<span class="dag" title="${esc([p.dod ? I18n.t('panel.deceased') : '', p.is_deleted ? I18n.t('panel.deleted') : ''].filter(Boolean).join(' · '))}">${p.dod ? '†' : ''}${p.is_deleted ? '✕' : ''}</span>` : ''}
         ${canAdd ? `<button type="button" class="add-kid" data-addkid="${esc(id)}" title="${esc(I18n.t('panel.addChild'))}" aria-label="${esc(I18n.t('panel.addChild'))}">＋</button>` : ''}</div>`;
@@ -694,24 +697,23 @@
     }, { passive: false });
 
     let drag = null, moved = false;
-    // Track whether the pointer started on a person node
-    let dragStartedOnNode = false;
     // Touch: two-finger pinch zoom, one-finger pan, double-tap zoom.
     const active = new Map();            // pointerId -> {x, y}
     let pinch = null;                     // {dist, cx, cy} while two fingers are down
     const pt = e => ({ x: e.clientX, y: e.clientY });
 
+    // Nothing inside the tree is a drag source. A card photo is an <img>, which a
+    // browser happily turns into a native HTML5 drag; that drag CANCELS the pointer
+    // stream (pointercancel, no pointerup), so panning died after a few pixels
+    // whenever the press landed on a photo. Intermittent by nature: it needs the card
+    // to have a loaded photo, and at high zoom the photo covers a bigger share of it.
+    st.addEventListener('dragstart', e => e.preventDefault());
     st.addEventListener('pointerdown', e => {
       // Record every finger first; the multi-touch decision below uses `active`.
       active.set(e.pointerId, pt(e));
-      // Capture on the CONTAINER, never on a card: the tree body is re-rendered
-      // whenever a person is selected, so a card is not a stable event target.
-      // With the container holding the capture, pointerup/cancel always come back
-      // here and the gesture state can never be orphaned.
-      try { st.setPointerCapture(e.pointerId); } catch (err) { /* already lost */ }
-      // Allow dragging to start from any node (person, spouse) or empty space.
-      // If we start on a node, mark it so we can distinguish tap from drag later.
-      dragStartedOnNode = !!e.target.closest('.node, .tg, .spouse-link');
+      // Stage chrome (zoom buttons, legend) is clickable, not draggable: never start
+      // a pan from it, so pressing a button cannot nudge the tree by a few pixels.
+      const onChrome = !!e.target.closest('.stage-ctrls, .legend');
       if (active.size >= 2) {
         // A second finger down turns the drag into a pinch. Position it mid-gesture
         // so the tree does not jump when the fingers move apart.
@@ -728,12 +730,23 @@
         return;
       }
       // Single finger: pan from anywhere on the stage. The drag threshold decides
-      // tap vs drag when the finger lifts.
+      // tap vs drag; an actual click decides selection (see the click handler).
+      if (onChrome) return;
       drag = { x: e.clientX, y: e.clientY, tx: S.tx, ty: S.ty }; moved = false;
       st.classList.add('dragging');
     });
 
-    st.addEventListener('pointermove', e => {
+    // Gesture tracking lives on the WINDOW, not the stage, so a fast pan that leaves
+    // the stage before the pointer lifts still releases cleanly.
+    //
+    // Deliberately NO setPointerCapture here. Pointer capture re-targets pointerup
+    // *and* the synthesized click to the capturing element, so every click inside
+    // the stage arrives with e.target === #treeView and closest('.node') === null:
+    // person cards, the + add-child button, the expand pills and the zoom controls
+    // all go dead for mouse users while still working under touch, which keeps
+    // dispatching click to the element under the finger. That asymmetry is exactly
+    // the "works on my phone, not on my PC" bug this replaces.
+    function onStagePointerMove(e) {
       if (active.has(e.pointerId) && pinch && active.size >= 2) {
         active.set(e.pointerId, pt(e));
         const [a, b] = [...active.values()];
@@ -746,51 +759,26 @@
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (Math.hypot(dx, dy) > 10) moved = true;
       S.tx = drag.tx + dx; S.ty = drag.ty + dy; applyTransform();
-    });
-    const end = (e) => {
-      if (e && e.pointerId != null && st.hasPointerCapture && st.hasPointerCapture(e.pointerId)) {
-        try { st.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
-      }
+    }
+    function end(e) {
       active.delete(e && e.pointerId);
       if (active.size < 2) pinch = null;
-      if (!active.size) { drag = null; st.classList.remove('dragging'); }
-    };
-    // If the browser drops the capture (DOM churn, gesture interruptions), clean
-    // (pointer) session for that pointer the same way as a real release would.
-    st.addEventListener('lostpointercapture', e => { if (active.has(e.pointerId)) end(e); });
-    // Drag: if movement exceeds threshold, it's a drag (don't click).
-    // If movement is below threshold, treat as tap (open person details).
-    st.addEventListener('pointerup', e => {
-      // CLEANUP FIRST, ALWAYS. The old version returned early inside the tap
-      // branches without calling end(e), so a successful spouse-card tap orphaned
-      // the whole pointer session: `active` kept the id, `drag` stayed set, the
-      // `dragging` class stayed on the container, and the next stray pointermove
-      // panned the tree as if the finger were still down.
-      const tapHit = dragStartedOnNode && !moved && active.has(e.pointerId);
-      let tapNode = null;
-      if (tapHit) {
-        const n = e.target.closest('.node');
-        if (n && !e.target.closest('[data-act]') && n.dataset.id) tapNode = n;
+      if (!active.size) {
+        drag = null;
+        st.classList.remove('dragging');
+        // A pan released outside the stage never produces a click inside it, so the
+        // "this click only finished a pan" latch must not survive into the next gesture.
+        if (!st.contains(e && e.target)) moved = false;
       }
-      end(e);
-      // Selection runs AFTER the session is fully cleared. The re-render that
-      // select()/focusPerson() trigger can never then compete with the gesture.
-      if (!tapNode) return;
-      const n = tapNode;
-      const id = n.dataset.id, spid = n.dataset.spousePid || null;
-      const openIt = () => {
-        // A spouse card is its own identity: the spouse's own record when it
-        // exists (data-spouse-pid), otherwise the virtual profile of that spouse.
-        if (n.dataset.spouse === '1') {
-          if (spid) select(spid, { focus: true, card: 'spouse' });
-          else select(id, { virtualSpouseOf: id, focus: true, card: 'spouse' });
-        } else {
-          select(id);
-        }
-      };
-      setTimeout(openIt, 0);   // defer past the click that completes this tap
-    });
-    st.addEventListener('pointercancel', end);
+    }
+    window.addEventListener('pointermove', onStagePointerMove);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    // Selection is handled by the click handler below, never by pointerup: a click
+    // is what browsers (and keyboards / screen readers / assistive tech) actually
+    // mean by "activate this card", and it carries the correct target for both a
+    // mouse and a finger. The pointer handlers above only pan and pinch.
+    //
     // Double-click / double-tap zooms in at the tap point.
     st.addEventListener('dblclick', e => {
       if (e.target.closest('.node, .tg, .stage-ctrls, .legend')) return;
@@ -800,6 +788,9 @@
 
     // Cards: click (details), toggle button (collapse), hover (tooltip)
     world.addEventListener('click', e => {
+      // A click that merely completes a pan is never an action. Consumed once, so
+      // the flag can never leak into the next deliberate click.
+      if (moved) { moved = false; return; }
       // The small + on a card adds a child to that person without selecting them.
       const addKid = e.target.closest('[data-addkid]');
       if (addKid) { const p = S.byId.get(addKid.dataset.addkid); if (p) startAddChild(p); return; }
@@ -816,7 +807,6 @@
       // A spouse card is its OWN identity, not an alias of the owner's card:
       //   * linked spouse (married-in person has an own record) -> open that record;
       //   * text-only spouse -> virtual profile built from the owner's record.
-      if (moved) return;   // a drag that ends over a card must not open it
       const n = e.target.closest('.node');
       if (n) {
         if (n.dataset.spouse === '1') {
@@ -1320,9 +1310,11 @@
   }
   // "Give the spouse a real record": open the person form pre-filled so the INSERT
   // carries the owner as spouse_name. One dialog, one new row, the link is right.
+  // `replaceSpouseName` is the placeholder the virtual panel was showing, so renaming
+  // the spouse while creating the record still updates the owner's side.
   function startAddSpousePerson(owner) {
     if (!window.PersonForm) { toast(I18n.t('save.notConnected')); return; }
-    PersonForm.open({ mode: 'addspouse', person: owner });
+    PersonForm.open({ mode: 'addspouse', person: owner, replaceSpouseName: owner.spouse || '' });
   }
   function startAddChild(p) {
     if (!window.PersonForm) { toast(I18n.t('save.notConnected')); return; }

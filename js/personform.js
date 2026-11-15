@@ -109,9 +109,15 @@
     return v;
   }
 
-  // Defaults for a new child: the parent's own name and their spouse fill in the
+  // Defaults for a new spouse: the owner (person being edited) fills in spouse_name,
+  // and the spouse field stays editable.
+  function valuesForNewSpouse(owner) {
+    const v = valuesFromPerson(null);
+    v.spouse_name = (owner && owner.name) || '';
+    return v;
+  }
 
-  // Defaults for a new spouse: the owner (person being edited) fills in spouse_name,\n  // and the spouse field stays editable.\n  function valuesForNewSpouse(owner) {\n    const v = valuesFromPerson(null);\n    v.spouse_name = owner.name || "";\n    return v;\n  }
+  // Defaults for a new child: the parent's own name and their spouse fill in the
   // father/mother boxes, and stay editable.
   function valuesForNewChild(parent) {
     const v = valuesFromPerson(null);
@@ -155,11 +161,16 @@
     const parent = opts.parent || null;
     const values = mode === 'edit' ? valuesFromPerson(person)
       : mode === 'addchild' ? valuesForNewChild(parent)
-        : valuesFromPerson(null);
+        : mode === 'addspouse' ? valuesForNewSpouse(person)
+          : valuesFromPerson(null);
     state = {
       mode: mode,
       person: person,
       spouseOwner: mode === 'addspouse' ? (person || null) : null,
+      // The name this spouse was already known by before a record existed (the virtual
+      // spouse panel), so saving may replace it. Null everywhere else: an existing,
+      // different partner is never overwritten.
+      replaceSpouseName: mode === 'addspouse' ? String(opts.replaceSpouseName || '').trim() : '',
       parent: parent,
       values: values,
       original: mode === 'edit' ? Object.assign({}, values) : {},
@@ -637,18 +648,21 @@
         const { data, error } = await client.from('people').insert(insert).select('*').single();
         if (error) throw error;
         person = { id: data.id, name: data.full_name, photo_path: data.photo_path || null };
-        // Addspouse: link BOTH sides. The new row gets the owner as spouse_name; the
-        // owner's spouse_name is only patched when it pointed at the new spouse's name
-        // exactly (that is the flow that created this request — a virtual spouse panel
-        // or branch tile), never silently over a DIFFERENT existing spouse.
+        // Addspouse: link BOTH sides. The new row already points back at the owner
+        // (insert.spouse_name), so only the owner's side is left to patch.
         if (state.mode === 'addspouse' && state.spouseOwner) {
-          // Patch the OWNER's side too — only when it does not already name somebody
-          // else (never overwrite an existing different partner silently).
+          // The value written is the NEW spouse's name — never the owner's own name.
+          // Only an empty spouse field, the same person, or the exact placeholder this
+          // dialog was opened for (state.replaceSpouseName) may be replaced: a different
+          // existing partner is kept.
           const owner = state.spouseOwner;
-          const newSpouseName = insert.spouse_name || payload.full_name;
-          if (!owner.spouse || owner.spouse.trim() === '' || owner.spouse === newSpouseName) {
+          const newSpouseName = String(payload.full_name || '').trim();
+          const existing = String(owner.spouse || '').trim();
+          const replaceable = !existing || existing === newSpouseName ||
+            (state.replaceSpouseName && existing === state.replaceSpouseName);
+          if (newSpouseName && replaceable) {
             const { error: linkErr } = await client.from('people')
-              .update({ spouse_name: owner.spouse === newSpouseName ? owner.spouse : newSpouseName })
+              .update({ spouse_name: newSpouseName })
               .eq('id', owner.id);
             if (linkErr) console.warn('Could not link the spouse back to the owner:', linkErr.message);
           }

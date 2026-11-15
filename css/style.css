@@ -3,7 +3,7 @@
    ═════════════════════════════════════════════════════════════════════════ */
 
 /* ---------- 0. Touch gestures ---------- */
-#treeView { touch-action: none; }
+#treeView { touch-action: none; user-select: none; -webkit-user-select: none; }
 
 /* ---------- 1. Tokens ---------- */
 :root {
@@ -413,6 +413,9 @@ code, .num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
 .empty { position: absolute; inset: 0; display: grid; place-items: center;
   color: var(--ink-3); font-size: var(--font-size-medium); pointer-events: none;
   font-family: var(--font-display); letter-spacing: .02em; }
+/* The overlay must not swallow the stage's pan gestures, but its one control has to
+   stay clickable — it sits inside the stage, so pointer-events:none would kill it. */
+.empty .link { pointer-events: auto; }
 
 .add-kid {
   position: absolute; right: 6px; bottom: 6px; width: 22px; height: 22px; padding: 0;
