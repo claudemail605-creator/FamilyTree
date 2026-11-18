@@ -999,8 +999,15 @@ table.mini th { top: 0; }
 .load-error .msg { flex: 1 1 220px; word-break: break-word; }
 
 /* ---------- 12. Auth gate ---------- */
+/* Signed out, the gate is the whole screen: no top bar with a search that has
+   nothing to search, and no app skeleton waiting below the fold. */
+body.gated .topbar,
+body.gated .layout,
+body.gated .drawer-backdrop { display: none; }
+body.gated .auth-gate { min-height: 100dvh; }
+
 .auth-gate {
-  min-height: calc(100dvh - 68px); padding: 40px 20px;
+  min-height: 100dvh; padding: 40px 20px;
   background:
     radial-gradient(1100px 520px at 50% -12%, var(--accent-soft), transparent 70%),
     radial-gradient(900px 600px at 100% 110%, var(--g1-soft), transparent 70%),
