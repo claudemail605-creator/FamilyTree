@@ -43,7 +43,7 @@
 
   /* ------------------------------ State ------------------------------ */
   const S = {
-    people: [], byId: new Map(), kids: new Map(), roots: [],
+    people: [], byId: new Map(), kids: new Map(), roots: [], spouseOf: new Map(),
     collapsed: new Set(),
     f: { q: '', gens: new Set(), genders: new Set(), status: '', branch: '', pob: '', qual: '', has: '' },
     view: 'tree', selected: null, sourceLabel: '',
@@ -238,11 +238,36 @@
     // instead of whitespace and only matched names that already agreed exactly.)
     const norm = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
     const byName = new Map(rows.map(p => [norm(p.name), p]));
-    S.spouseLink = new Map();   // ownerId -> canonical spouse person id (when one exists)
     rows.forEach(p => {
       const hit = p.spouse && byName.get(norm(p.spouse));
       if (hit && hit.id !== p.id) p.spousePid = hit.id;
       else p.spousePid = null;
+    });
+
+    // The inverse link. A married-in spouse has no parent row by design (the
+    // add_relative RPC writes parent_id = null), so the walk above has just given
+    // them generation 0 at the root of the canvas. That is not where they belong:
+    // their card is drawn beside the partner whose spouse_name names them.
+    // Remember that partner here, and borrow their generation, so the tree, the
+    // generation filter, tooltips and the panel all agree with the card on screen.
+    S.spouseOf = new Map();   // spouse person id -> [people whose card draws them]
+    rows.forEach(p => {
+      if (!p.spousePid || p.spousePid === p.id) return;
+      if (!S.spouseOf.has(p.spousePid)) S.spouseOf.set(p.spousePid, []);
+      S.spouseOf.get(p.spousePid).push(p);
+    });
+    S.spouseOf.forEach((owners, sid) => {
+      const s = S.byId.get(sid);
+      // Someone with a parent on record has a natal place of their own; leave it.
+      if (!s || (s.parentId && S.byId.has(s.parentId))) return;
+      const owner = owners.find(o => Number.isFinite(o.gen)) || owners[0];
+      if (!owner || !Number.isFinite(owner.gen) || !Number.isFinite(s.gen)) return;
+      const delta = owner.gen - s.gen;
+      if (!delta) return;
+      // Any children recorded under this spouse move with them, so a spouse who
+      // was given a child of her own does not stay stuck at generation 0.
+      const shift = p => { p.gen += delta; (S.kids.get(p.id) || []).forEach(shift); };
+      shift(s);
     });
 
     // text for searching
@@ -551,7 +576,16 @@
   function computeVisibility() {
     matchSet = new Set(S.people.filter(matches).map(p => p.id));
     const scope = computeScope();
-    if (!scope && !filterActive()) { visible = null; vKids = S.kids; vRoots = S.roots; return; }
+    // vKids is always a fresh copy: folding a spouse in below moves her children
+    // to her partner's branch without touching the real S.kids model.
+    vKids = new Map(S.people.map(p => [p.id, (S.kids.get(p.id) || []).slice()]));
+    vRoots = [];
+    if (!scope && !filterActive()) {
+      visible = null;
+      vRoots = S.roots.slice();
+      foldInSpouses(null);
+      return;
+    }
     // Filters narrow the scope instead of replacing it: searching inside My view can
     // hide a branch card, but it can never pull in someone from another branch.
     visible = scope ? new Set(scope) : new Set(S.people.map(p => p.id));
@@ -559,12 +593,46 @@
       for (const id of [...visible]) if (!matchSet.has(id)) visible.delete(id);
       if (S.f.branch && !scope) visible.add(S.f.branch);
     }
-    vKids = new Map(S.people.map(p => [p.id, []])); vRoots = [];
+    // Only people actually on screen may enter vKids. layout() walks vKids without
+    // checking `visible` again, so a hidden child of a visible parent (a scoped-out
+    // nephew, a filtered-out son) would otherwise be positioned and drawn anyway.
+    vKids = new Map(S.people.map(p => [p.id, []]));
     S.people.forEach(p => {
       if (!visible.has(p.id)) return;
       let a = p.parent; while (a && !visible.has(a.id)) a = a.parent;
       (a ? vKids.get(a.id) : vRoots).push(p);
     });
+    foldInSpouses(visible);
+  }
+
+  // A spouse with an own record is a top-level row (no parent), but is already drawn
+  // as the card beside their partner. Drawing that row as a root as well is the same
+  // person twice - a second couple at generation 0 at the top of the tree. Keep the
+  // standalone card only when the partner is not on screen (a filter can hide him
+  // while she still matches), and move any children recorded under the spouse to the
+  // partner's branch so they never vanish with the duplicate card.
+  function foldInSpouses(visibleSet) {
+    if (!S.spouseOf || !S.spouseOf.size) return;
+    const folded = new Set();
+    for (const [sid, owners] of S.spouseOf) {
+      const s = S.byId.get(sid);
+      if (!s) continue;
+      if (s.parentId && S.byId.has(s.parentId)) continue;   // has a natal place
+      if (visibleSet && !visibleSet.has(sid)) continue;
+      // A host that has already been folded in has no card of its own, so it
+      // cannot host anyone else. This also keeps two parentless partners from
+      // folding into each other and leaving no card at all.
+      const hosts = owners.filter(o => !folded.has(o.id) && (!visibleSet || visibleSet.has(o.id)));
+      if (!hosts.length) continue;                          // partner hidden: keep her card
+      const ri = vRoots.indexOf(s);
+      if (ri !== -1) vRoots.splice(ri, 1);
+      folded.add(sid);
+      const moving = vKids.get(sid) || [];
+      vKids.set(sid, []);
+      const list = vKids.get(hosts[0].id);
+      if (!list) continue;
+      moving.forEach(c => { if (!list.some(x => x.id === c.id)) list.push(c); });
+    }
   }
   const shownKids = p => vKids.get(p.id) || [];
 
