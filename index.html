@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#d95d39">
+  <meta name="theme-color" content="#c2552f">
   <title data-i18n>brand.title</title>
   <link rel="stylesheet" href="css/style.css">
   <!-- Installable web app (Phase 6): manifest + icons, so relatives can add the
@@ -18,21 +18,48 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
 </head>
 <body>
+  <!-- One icon set for the whole chrome. Drawn as strokes so every icon inherits
+       the colour and weight of the control it sits in. -->
+  <svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></symbol>
+    <symbol id="i-tree" viewBox="0 0 24 24"><circle cx="12" cy="4.6" r="2.2"/><circle cx="5.4" cy="18.4" r="2.2"/><circle cx="18.6" cy="18.4" r="2.2"/><path d="M12 6.8v3.4M12 10.2H8a2 2 0 00-2 2v4M12 10.2h4a2 2 0 012 2v4"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0114 0"/></symbol>
+    <symbol id="i-admin" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 3v10m0 0l-3.5-3.5M12 13l3.5-3.5M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></symbol>
+    <symbol id="i-tools" viewBox="0 0 24 24"><path d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 10-2.6 5.9"/><path d="M20 5v5h-5"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18M12 3a15 15 0 000 18"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.5 14.5A8.5 8.5 0 019.5 3.5a8.5 8.5 0 1011 11z"/></symbol>
+    <symbol id="i-signout" viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 012 2v12a2 2 0 01-2 2h-3M10 8l-4 4 4 4M6 12h10"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6M11 8v6M8 11h6"/></symbol>
+    <symbol id="i-zoom-out" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6M8 11h6"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M21 16v3a2 2 0 01-2 2h-3M3 16v3a2 2 0 002 2h3"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 011-1h4M20 9V5a1 1 0 00-1-1h-4M4 15v4a1 1 0 001 1h4M20 15v4a1 1 0 01-1 1h-4"/></symbol>
+    <symbol id="i-collapse" viewBox="0 0 24 24"><path d="M9 4v4a1 1 0 01-1 1H4M15 4v4a1 1 0 001 1h4M9 20v-4a1 1 0 00-1-1H4M15 20v-4a1 1 0 011-1h4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  </svg>
+
   <header class="topbar">
-    <button class="icon-btn only-mobile" id="btnFilters" data-i18n="btnFilters" data-i18n-attr="aria-label">☰</button>
+    <button class="icon-btn only-mobile" id="btnFilters" data-i18n="btnFilters" data-i18n-attr="aria-label">
+      <svg class="ico" aria-hidden="true"><use href="#i-menu"></use></svg>
+    </button>
+
     <div class="brand">
-      <span class="brand-mark">⌂</span>
-      <div>
+      <span class="brand-mark" aria-hidden="true"><svg class="ico"><use href="#i-tree"></use></svg></span>
+      <div class="brand-text">
         <h1 data-i18n>brand.title</h1>
         <p id="subtitle">Loading…</p>
       </div>
     </div>
 
     <div class="search">
-      <span class="search-ico">⌕</span>
+      <svg class="search-ico" aria-hidden="true"><use href="#i-search"></use></svg>
       <input id="search" type="search" data-i18n-placeholder="search.placeholder" placeholder="Search name, nickname, spouse, place…" autocomplete="off">
     </div>
 
@@ -46,20 +73,63 @@
     <button class="btn nav-branch" id="btnBranch" hidden>
       <span data-i18n>branch.nav</span>
     </button>
-    <!-- Admins only: the spreadsheet export sits in the top bar. Importing an .xlsx is
-         in the admin screen (Admin → Import and backup). -->
-    <button class="btn ghost" id="btnExport" title="Export to Excel" data-i18n="export.title" data-i18n-attr="title" hidden>
-      <span data-i18n>export.button</span>
-    </button>
+
+    <!-- The signed-in chip. auth.js renders it; js/chrome.js opens #appMenu. -->
     <div class="auth" id="authArea"></div>
-    <!-- Phase 6 tools: how are we related, upcoming dates, statistics, print / PNG. -->
-    <button class="icon-btn" id="btnTools" title="Tools" data-i18n="extra.tools" data-i18n-attr="title" aria-label="Tools">🧰</button>
-    <button class="icon-btn" id="btnRefresh" title="Refresh data" data-i18n="refresh.title" data-i18n-attr="title" aria-label="Refresh data">⟳</button>
-    <button class="icon-btn" id="btnAdmin" data-i18n="btnAdmin" data-i18n-attr="aria-label" title="Admin panel" hidden>⚙</button>
-    <div class="lang" id="langArea">
-      <button class="icon-btn" id="btnLang" data-i18n="btnLang" data-i18n-attr="aria-label" title="Change language">🌐</button>
+
+    <!-- Everything that used to be a row of icon-only buttons. Same actions, named
+         and grouped, in the row language of the relationship menu. -->
+    <div class="app-menu" id="appMenu" role="menu" aria-orientation="vertical" aria-labelledby="btnMenu" hidden>
+      <div class="menu-id">
+        <span class="auth-avatar" id="menuAvatar" aria-hidden="true"></span>
+        <div class="menu-id-text">
+          <b id="menuName"></b>
+          <span id="menuEmail"></span>
+        </div>
+      </div>
+      <div class="menu-sep" role="separator"></div>
+
+      <button type="button" class="menu-item" id="btnProfile" role="menuitem">
+        <span class="mi-ico" aria-hidden="true"><svg class="ico"><use href="#i-user"></use></svg></span>
+        <span class="mi-label" data-i18n>btnProfile</span>
+      </button>
+
+      <div class="menu-sep" role="separator"></div>
+
+      <button type="button" class="menu-item" id="btnAdmin" role="menuitem" hidden>
+        <span class="mi-ico" aria-hidden="true"><svg class="ico"><use href="#i-admin"></use></svg></span>
+        <span class="mi-label" data-i18n>btnAdmin</span>
+      </button>
+      <button type="button" class="menu-item" id="btnExport" role="menuitem" hidden>
+        <span class="mi-ico" aria-hidden="true"><svg class="ico"><use href="#i-export"></use></svg></span>
+        <span class="mi-label" data-i18n>export.button</span>
+      </button>
+      <button type="button" class="menu-item" id="btnTools" role="menuitem">
+        <span class="mi-ico" aria-hidden="true"><svg class="ico"><use href="#i-tools"></use></svg></span>
+        <span class="mi-label" data-i18n>extra.tools</span>
+      </button>
+      <button type="button" class="menu-item" id="btnRefresh" role="menuitem">
+        <span class="mi-ico" aria-hidden="true"><svg class="ico"><use href="#i-refresh"></use></svg></span>
+        <span class="mi-label" data-i18n>refresh.title</span>
+      </button>
+      <div class="lang" id="langArea">
+        <button type="button" class="menu-item" id="btnLang" role="menuitem">
+          <span class="mi-ico" aria-hidden="true"><svg class="ico"><use href="#i-globe"></use></svg></span>
+          <span class="mi-label" data-i18n>btnLang</span>
+        </button>
+      </div>
+      <button type="button" class="menu-item" id="btnTheme" role="menuitem">
+        <span class="mi-ico" aria-hidden="true"><svg class="ico"><use href="#i-moon"></use></svg></span>
+        <span class="mi-label" data-i18n>btnTheme</span>
+      </button>
+
+      <div class="menu-sep" role="separator"></div>
+
+      <button type="button" class="menu-item danger" id="btnSignOut" role="menuitem">
+        <span class="mi-ico" aria-hidden="true"><svg class="ico"><use href="#i-signout"></use></svg></span>
+        <span class="mi-label" data-i18n>btnSignOut</span>
+      </button>
     </div>
-    <button class="icon-btn" id="btnTheme" data-i18n="btnTheme" data-i18n-attr="aria-label" title="Toggle dark mode">☾</button>
   </header>
 
   <!-- Full-screen sign-in gate (Phase 1). Everything below stays hidden until an
@@ -71,7 +141,6 @@
 
   <div class="layout">
     <aside class="sidebar" id="sidebar">
-      <button class="icon-btn drawer-close only-mobile" id="btnDrawerClose" data-i18n="panel.close" data-i18n-attr="aria-label" aria-label="Close filters">✕</button>
       <!-- Phones: the top-bar "My view" is hidden at this width, so the drawer
            carries the same toggle. -->
       <button class="btn nav-branch-mobile" id="btnBranchMobile" hidden>
@@ -80,6 +149,10 @@
       <div class="side-head">
         <h2 data-i18n>sidebar.filters</h2>
         <button class="link" id="btnReset" data-i18n>btnReset</button>
+        <!-- Only drawn in the phone drawer; same button that opens it closes it. -->
+        <button class="icon-btn drawer-close only-mobile" id="btnDrawerClose" data-i18n="panel.close" data-i18n-attr="aria-label" aria-label="Close filters">
+          <svg class="ico" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
       </div>
 
       <div class="stats" id="stats"></div>
@@ -94,49 +167,63 @@
         <div class="chips" id="genderChips"></div>
       </div>
 
-      <div class="field">
-        <label for="fStatus" data-i18n>label.status</label>
-        <select id="fStatus">
-          <option value="" data-i18n>status.everyone</option>
-          <option value="living" data-i18n>status.living</option>
-          <option value="deceased" data-i18n>status.deceased</option>
-        </select>
-      </div>
+      <!-- The three filters most people need are above. The rest live here, one
+           tap away, and the summary says how many are currently narrowing the tree. -->
+      <details class="more-filters" id="moreFilters">
+        <summary>
+          <span class="mf-title">
+            <span class="mf-closed" data-i18n>sidebar.more</span>
+            <span class="mf-open" data-i18n>sidebar.less</span>
+            <span class="mf-count" id="moreCount" hidden></span>
+          </span>
+          <svg class="mf-chev ico" aria-hidden="true"><use href="#i-chev"></use></svg>
+        </summary>
+        <div class="mf-body">
+          <div class="field">
+            <label for="fStatus" data-i18n>label.status</label>
+            <select id="fStatus">
+              <option value="" data-i18n>status.everyone</option>
+              <option value="living" data-i18n>status.living</option>
+              <option value="deceased" data-i18n>status.deceased</option>
+            </select>
+          </div>
 
-      <div class="field">
-        <label for="fBranch" data-i18n>label.branch</label>
-        <select id="fBranch"></select>
-      </div>
+          <div class="field">
+            <label for="fBranch" data-i18n>label.branch</label>
+            <select id="fBranch"></select>
+          </div>
 
-      <div class="field">
-        <label for="fPob" data-i18n>label.pob</label>
-        <select id="fPob"></select>
-      </div>
+          <div class="field">
+            <label for="fPob" data-i18n>label.pob</label>
+            <select id="fPob"></select>
+          </div>
 
-      <div class="field">
-        <label for="fQual" data-i18n>label.qual</label>
-        <select id="fQual"></select>
-      </div>
+          <div class="field">
+            <label for="fQual" data-i18n>label.qual</label>
+            <select id="fQual"></select>
+          </div>
 
-      <div class="field">
-        <label for="fHas" data-i18n>label.has</label>
-        <select id="fHas">
-          <option value="" data-i18n>has.anything</option>
-          <option value="dob" data-i18n>has.dob</option>
-          <option value="spouse" data-i18n>has.spouse</option>
-          <option value="children" data-i18n>has.children</option>
-          <option value="nochildren" data-i18n>has.nochildren</option>
-        </select>
-      </div>
+          <div class="field">
+            <label for="fHas" data-i18n>label.has</label>
+            <select id="fHas">
+              <option value="" data-i18n>has.anything</option>
+              <option value="dob" data-i18n>has.dob</option>
+              <option value="spouse" data-i18n>has.spouse</option>
+              <option value="children" data-i18n>has.children</option>
+              <option value="nochildren" data-i18n>has.nochildren</option>
+            </select>
+          </div>
 
-      <!-- Phase 2: only admins see soft-deleted people, and only when they ask for them. -->
-      <div class="field" id="deletedField" hidden>
-        <label data-i18n>label.deleted</label>
-        <label class="check-row">
-          <input type="checkbox" id="showDeleted">
-          <span data-i18n>filter.showDeleted</span>
-        </label>
-      </div>
+          <!-- Phase 2: only admins see soft-deleted people, and only when they ask for them. -->
+          <div class="field" id="deletedField" hidden>
+            <label data-i18n>label.deleted</label>
+            <label class="check-row">
+              <input type="checkbox" id="showDeleted">
+              <span data-i18n>filter.showDeleted</span>
+            </label>
+          </div>
+        </div>
+      </details>
 
       <div class="result-count" id="resultCount"></div>
     </aside>
@@ -151,11 +238,21 @@
         <div class="print-head" id="printHead"></div>
         <div id="world" class="world"></div>
         <div class="stage-ctrls">
-          <button class="icon-btn" id="zoomIn" title="Zoom in" data-i18n="zoom.in" data-i18n-attr="title">+</button>
-          <button class="icon-btn" id="zoomOut" title="Zoom out" data-i18n="zoom.out" data-i18n-attr="title">−</button>
-          <button class="icon-btn" id="zoomFit" title="Fit to screen" data-i18n="zoom.fit" data-i18n-attr="title">⤢</button>
-          <button class="icon-btn" id="expandAll" title="Expand all" data-i18n="expand.all" data-i18n-attr="title">⊞</button>
-          <button class="icon-btn" id="collapseAll" title="Collapse all" data-i18n="collapse.all" data-i18n-attr="title">⊟</button>
+          <button class="icon-btn" id="zoomIn" title="Zoom in" data-i18n="zoom.in" data-i18n-attr="title" aria-label="Zoom in">
+            <svg class="ico" aria-hidden="true"><use href="#i-zoom-in"></use></svg>
+          </button>
+          <button class="icon-btn" id="zoomOut" title="Zoom out" data-i18n="zoom.out" data-i18n-attr="title" aria-label="Zoom out">
+            <svg class="ico" aria-hidden="true"><use href="#i-zoom-out"></use></svg>
+          </button>
+          <button class="icon-btn" id="zoomFit" title="Fit to screen" data-i18n="zoom.fit" data-i18n-attr="title" aria-label="Fit to screen">
+            <svg class="ico" aria-hidden="true"><use href="#i-fit"></use></svg>
+          </button>
+          <button class="icon-btn" id="expandAll" title="Expand all" data-i18n="expand.all" data-i18n-attr="title" aria-label="Expand all">
+            <svg class="ico" aria-hidden="true"><use href="#i-expand"></use></svg>
+          </button>
+          <button class="icon-btn" id="collapseAll" title="Collapse all" data-i18n="collapse.all" data-i18n-attr="title" aria-label="Collapse all">
+            <svg class="ico" aria-hidden="true"><use href="#i-collapse"></use></svg>
+          </button>
         </div>
         <div class="legend">
           <span><i class="dot male"></i> <span data-i18n>legend.male</span></span>
@@ -164,9 +261,9 @@
           <span class="hint" data-i18n>legend.hint</span>
         </div>
         <div class="empty" id="emptyMsg" hidden>
-        <span data-i18n>empty.msg</span>
-        <button type="button" class="link" id="btnClearFilters" data-i18n>empty.clear</button>
-      </div>
+          <span data-i18n>empty.msg</span>
+          <button type="button" class="link" id="btnClearFilters" data-i18n>empty.clear</button>
+        </div>
       </section>
 
       <section id="tableView" class="table-wrap" hidden>
@@ -190,6 +287,7 @@
   <script src="js/supabase.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/i18n.js"></script>
+  <script src="js/chrome.js"></script>
   <script src="js/photos.js"></script>
   <script src="js/personform.js"></script>
   <script src="js/hijri.js"></script>

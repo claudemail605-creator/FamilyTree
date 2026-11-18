@@ -13,7 +13,7 @@
    ===================================================================== */
 'use strict';
 
-const CACHE = 'family-tree-shell-v10';
+const CACHE = 'family-tree-shell-v11';
 const SHELL = [
   './',
   'index.html',
@@ -22,6 +22,7 @@ const SHELL = [
   'js/supabase.js',
   'js/auth.js',
   'js/i18n.js',
+  'js/chrome.js',
   'js/photos.js',
   'js/personform.js',
   'js/hijri.js',

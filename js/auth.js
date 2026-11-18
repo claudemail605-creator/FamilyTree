@@ -379,16 +379,26 @@
 
       const p = this.profile;
       const name = p.full_name || p.email || I18n.t('auth.signedIn');
-      const adminBadge = this.isAdmin()
-        ? ' <span class="tag gray" style="font-size:10.5px;padding:1px 6px">' + esc(I18n.t('admin.adminTag')) + '</span>'
-        : '';
+      const role = this.isAdmin() ? I18n.t('admin.adminTag') : I18n.t('auth.signedIn');
+      // The chip is the only thing the top bar shows about the user. Everything
+      // else — profile, admin, export, tools, refresh, language, theme, sign out —
+      // lives in the static #appMenu, opened by js/chrome.js.
       area.innerHTML = `
-        <div class="auth-avatar">${esc(initials(name))}</div>
-        <span class="auth-name" title="${esc(name)}">${esc(name)}${adminBadge}</span>
-        <button class="auth-btn" id="btnProfile" title="${esc(I18n.t('profile.title'))}" data-i18n>btnProfile</button>
-        <button class="auth-btn auth-signout" id="btnSignOut" title="${esc(I18n.t('btnSignOut'))}" data-i18n>btnSignOut</button>`;
-      $('#btnProfile').onclick = () => this._showProfileEdit();
-      $('#btnSignOut').onclick = () => this.signOut();
+        <button type="button" class="auth-chip" id="btnMenu" aria-haspopup="menu"
+                aria-expanded="false" aria-controls="appMenu" title="${esc(I18n.t('btnMenu'))}">
+          <span class="auth-avatar" aria-hidden="true">${esc(initials(name))}</span>
+          <span class="auth-chip-text">
+            <span class="auth-name" title="${esc(name)}">${esc(name)}</span>
+            <span class="auth-role">${esc(role)}</span>
+          </span>
+          <svg class="auth-caret ico" aria-hidden="true"><use href="#i-chev"></use></svg>
+        </button>`;
+      // Those rows exist in index.html from first paint, so bind them here rather
+      // than rebuilding them with the chip.
+      const prof = $('#btnProfile');
+      const out = $('#btnSignOut');
+      if (prof) prof.onclick = () => this._showProfileEdit();
+      if (out) out.onclick = () => this.signOut();
       I18n.apply();
     },
 
@@ -423,6 +433,10 @@
       if (!gate) return;
       gate.innerHTML = `
         <form class="gate-card" id="signInForm" novalidate>
+          <div class="gate-brand">
+            <span class="brand-mark" aria-hidden="true"><svg class="ico"><use href="#i-tree"></use></svg></span>
+            <span class="gate-brand-name" data-i18n>brand.title</span>
+          </div>
           <h2 class="gate-title" data-i18n>auth.signIn</h2>
           <p class="gate-sub" data-i18n>auth.signInSub</p>
           ${this._gateNotice ? `<div class="gate-notice" role="status" data-i18n>${esc(this._gateNotice)}</div>` : ''}
@@ -563,67 +577,84 @@
     /* ---------- Profile edit (own name + language) ---------- */
     _showProfileEdit() {
       if (!this.profile) return;
-      const panel = document.createElement('div');
-      panel.className = 'auth-modal';
+      const overlay = document.createElement('div');
+      overlay.className = 'modal';
+      overlay.id = 'profileModal';
       const currentName = this.profile.full_name || '';
       const currentLang = this.profile.language || 'en';
       const isActive = !!this.profile.active;
       const isAdmin = this.isAdmin();
-      panel.innerHTML = `
-        <div class="auth-modal-box">
-          <h3 style="margin:0 0 10px;font-size:15px" data-i18n>profile.title</h3>
-          <p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-2)" data-i18n>${
-            isAdmin ? 'admin.editUsersNote' : 'admin.editUsersNoteNonAdmin'}</p>
-          ${!isActive ? `<div style="margin:0 0 12px;padding:8px 12px;background:var(--female-soft);color:var(--female);border-radius:8px;font-size:12.5px" data-i18n>admin.accountInactive</div>` : ''}
-          <div class="auth-field">
-            <label class="edit-label" for="peName" data-i18n>profile.nameLabel</label>
-            <input id="peName" type="text" value="${esc(currentName)}" class="edit-input">
+      overlay.innerHTML = `
+        <div class="modal-card profile-card" role="dialog" aria-modal="true" aria-labelledby="peTitle">
+          <div class="modal-head">
+            <div>
+              <h3 id="peTitle" data-i18n>profile.title</h3>
+              <p class="modal-sub" data-i18n>${isAdmin ? 'admin.editUsersNote' : 'admin.editUsersNoteNonAdmin'}</p>
+            </div>
+            <div class="modal-head-actions">
+              <button type="button" class="icon-btn" id="peClose" aria-label="${esc(I18n.t('panel.close'))}">✕</button>
+            </div>
           </div>
-          <div class="auth-field" style="margin-top:8px">
-            <label class="edit-label" for="peLang" data-i18n>profile.langLabel</label>
-            <select id="peLang" class="edit-input">
-              <option value="en" ${currentLang === 'en' ? 'selected' : ''} data-i18n>profile.lang.en</option>
-              <option value="ur" ${currentLang === 'ur' ? 'selected' : ''} data-i18n>profile.lang.ur</option>
-              <option value="hi" ${currentLang === 'hi' ? 'selected' : ''} data-i18n>profile.lang.hi</option>
-            </select>
+          <div class="modal-body">
+            ${!isActive ? '<div class="admin-notice" data-i18n>admin.accountInactive</div>' : ''}
+            <div class="edit-field">
+              <label class="edit-label" for="peName" data-i18n>profile.nameLabel</label>
+              <input id="peName" type="text" value="${esc(currentName)}" class="edit-input">
+            </div>
+            <div class="edit-field">
+              <label class="edit-label" for="peLang" data-i18n>profile.langLabel</label>
+              <select id="peLang" class="edit-input">
+                <option value="en" ${currentLang === 'en' ? 'selected' : ''} data-i18n>profile.lang.en</option>
+                <option value="ur" ${currentLang === 'ur' ? 'selected' : ''} data-i18n>profile.lang.ur</option>
+                <option value="hi" ${currentLang === 'hi' ? 'selected' : ''} data-i18n>profile.lang.hi</option>
+              </select>
+            </div>
+            <p id="peMsg" class="edit-hint" role="status"></p>
           </div>
-          <div style="display:flex;gap:8px;margin-top:14px">
-            <button class="btn" id="peCancel" style="flex:1" data-i18n>profile.cancel</button>
-            <button class="btn" id="peGo" style="flex:2;background:var(--accent);color:#fff;border-color:var(--accent)" data-i18n>profile.save</button>
+          <div class="modal-foot">
+            <button type="button" class="btn" id="peCancel" data-i18n>profile.cancel</button>
+            <button type="button" class="btn primary" id="peGo" data-i18n>profile.save</button>
           </div>
-          <p id="peMsg" style="margin-top:10px;font-size:12px;color:var(--ink-2);min-height:14px"></p>
         </div>`;
-      document.body.appendChild(panel);
+      document.body.appendChild(overlay);
+      document.documentElement.classList.add('modal-open');
       I18n.apply();
 
-      panel.querySelector('#peGo').onclick = () => {
+      const close = () => {
+        overlay.remove();
+        document.documentElement.classList.remove('modal-open');
+        window.removeEventListener('keydown', onKey, true);
+      };
+      const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+      window.addEventListener('keydown', onKey, true);
+      overlay.querySelector('#peClose').onclick = close;
+      overlay.querySelector('#peCancel').onclick = close;
+      overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+
+      overlay.querySelector('#peGo').onclick = () => {
         const name = panel.querySelector('#peName').value.trim();
         const lang = panel.querySelector('#peLang').value;
-        panel.querySelector('#peMsg').textContent = '';
+        overlay.querySelector('#peMsg').textContent = '';
         if (!name) { panel.querySelector('#peMsg').textContent = I18n.t('profile.nameRequired'); return; }
-        panel.querySelector('#peGo').disabled = true;
-        panel.querySelector('#peGo').textContent = I18n.t('profile.save') + '…';
+        overlay.querySelector('#peGo').disabled = true;
+        overlay.querySelector('#peGo').textContent = I18n.t('profile.save') + '…';
         this.updateProfile({ full_name: name, language: lang })
           .then(() => {
-            panel.querySelector('#peMsg').textContent = I18n.t('profile.updated');
-            panel.querySelector('#peGo').disabled = false;
-            panel.querySelector('#peGo').textContent = I18n.t('profile.save');
+            overlay.querySelector('#peMsg').textContent = I18n.t('profile.updated');
+            overlay.querySelector('#peGo').disabled = false;
+            overlay.querySelector('#peGo').textContent = I18n.t('profile.save');
             this._render();
           })
           .catch(err => {
             const msg = (err && err.message) || String(err);
-            panel.querySelector('#peMsg').textContent = /forbids|permission/i.test(msg)
+            overlay.querySelector('#peMsg').textContent = /forbids|permission/i.test(msg)
               ? I18n.t('admin.profilePermError')
               : I18n.fmt('admin.profileFailed', { msg: msg });
-            panel.querySelector('#peGo').disabled = false;
-            panel.querySelector('#peGo').textContent = I18n.t('profile.save');
+            overlay.querySelector('#peGo').disabled = false;
+            overlay.querySelector('#peGo').textContent = I18n.t('profile.save');
           });
       };
-      panel.querySelector('#peCancel').onclick = () => panel.remove();
-      panel.querySelector('#peName').focus();
-      const escHandler = (e) => { if (e.key === 'Escape') { panel.remove(); window.removeEventListener('keydown', escHandler); } };
-      window.addEventListener('keydown', escHandler);
-      panel.addEventListener('click', (e) => { if (e.target === panel) { panel.remove(); window.removeEventListener('keydown', escHandler); } });
+      overlay.querySelector('#peName').focus();
     },
 
     updateProfile(fields) {
@@ -642,16 +673,6 @@
   // exposed for app.js
   window.Auth = Auth;
 
-  // small inline styles for the profile modal (hoisted once)
-  if (!document.getElementById('auth-modal-style')) {
-    const s = document.createElement('style');
-    s.id = 'auth-modal-style';
-    s.textContent = `
-      .auth-modal { position: fixed; inset: 0; background: rgba(20,30,35,.45); display: grid; place-items: center; z-index: 100; }
-      .auth-modal-box { width: 360px; max-width: 92vw; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 20px; }
-      .auth-field { display: block; }
-      @media (max-width: 640px) { .auth-modal-box { padding: 16px; } }
-    `;
-    document.head.appendChild(s);
-  }
+  // exposed for app.js
+  window.Auth = Auth;
 })();

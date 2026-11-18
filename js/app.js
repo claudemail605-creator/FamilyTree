@@ -676,13 +676,11 @@
       if (readonly) cls.push('readonly');
       if (scope && id === S.scopeAnchor) cls.push('me');
       const roTitle = readonly ? ` title="${esc(I18n.t('scope.readOnly'))}"` : '';
-      const tg = nk ? `<button class="tg" data-tg="${esc(id)}" style="left:${ox + v.x + v.w / 2}px;top:${oy + v.y + NH - 11}px" title="${esc(S.collapsed.has(id) ? I18n.t('tg.expand') : I18n.t('tg.collapse'))}">${S.collapsed.has(id) ? '+ ' + nk : '−'}</button>` : '';
-      // In My view one ＋ opens a named relationship menu; in the full tree it keeps
-      // its old meaning (add a child) so admins lose nothing.
+      const tg = nk ? `<button class="tg" data-tg="${esc(id)}" style="left:${ox + v.x + NW / 2}px;top:${oy + v.y + NH - 11}px" title="${esc(S.collapsed.has(id) ? I18n.t('tg.expand') : I18n.t('tg.collapse'))}">${S.collapsed.has(id) ? '+ ' + nk : '−'}</button>` : '';
+      // One ＋ everywhere, and it always opens the named relationship menu: the
+      // same three choices with the same reasons, in the full tree and in My view.
       const addBtn = canAdd
-        ? (scope
-          ? `<button type="button" class="add-kid" data-relmenu="${esc(id)}" title="${esc(I18n.fmt('scope.addRelative', { name: dispName(p) }))}" aria-label="${esc(I18n.fmt('scope.addRelative', { name: dispName(p) }))}">＋</button>`
-          : `<button type="button" class="add-kid" data-addkid="${esc(id)}" title="${esc(I18n.t('panel.addChild'))}" aria-label="${esc(I18n.t('panel.addChild'))}">＋</button>`)
+        ? `<button type="button" class="add-kid" data-relmenu="${esc(id)}" title="${esc(I18n.fmt('scope.addRelative', { name: dispName(p) }))}" aria-label="${esc(I18n.fmt('scope.addRelative', { name: dispName(p) }))}">＋</button>`
         : '';
       html += `<div class="${cls.join(' ')}" data-id="${esc(id)}"${roTitle} style="left:${ox + v.x}px;top:${oy + v.y}px;width:${NW}px;height:${NH}px">
         ${scope && id === S.scopeAnchor ? `<span class="me-badge">${esc(I18n.t('scope.you'))}</span>` : ''}
@@ -700,8 +698,7 @@
         html += `<div class="spouse-link" style="left:${sx}px;top:${oy + v.y + NH / 2}px;width:${SG}px"><i>♥</i></div>
           <div class="node spouse ${sg}${spouseSel || (!p.spousePid && S.virtualSpouseOf && S.virtualSpouseOf === id) ? ' selected' : ''}" data-id="${esc(id)}" data-spouse="1"${p.spousePid ? ` data-spouse-pid="${esc(p.spousePid)}"` : ''} style="left:${sx + SG}px;top:${oy + v.y}px;width:${NW}px;height:${NH}px">
           <div class="avatar">${esc(initials(p.spouse))}</div>
-          <div class="meta"><div class="nm">${esc(p.spouse)}</div><div class="nk">${esc(I18n.fmt('panel.spouseOf', { name: p.nick || dispName(p) }))}</div></div>
-          ${canAdd && !scope ? `<button type="button" class="add-kid" data-addkid="${esc(id)}" title="${esc(I18n.t('panel.addChild'))}" aria-label="${esc(I18n.t('panel.addChild'))}">＋</button>` : ''}</div>`;
+          <div class="meta"><div class="nm">${esc(p.spouse)}</div><div class="nk">${esc(I18n.fmt('panel.spouseOf', { name: p.nick || dispName(p) }))}</div></div></div>`;
       }
       html += tg;
     });
@@ -1037,7 +1034,7 @@
     if (v == null || v === '') return '';
     let h = null;
     if (window.Hijri && iso) { try { h = window.Hijri.format(iso); } catch (e) { h = null; } }
-    return `<div class="p-row"><div class="k">${k}</div><div class="v">${esc(v)}${h ? `<div class="v-hijri">${esc(I18n.t('hijri.label'))}: ${esc(h)}</div>` : ''}</div></div>`;
+    return `<div class="p-row"><div class="k">${k}</div><div class="v">${esc(v)}${h ? `<div class="v-hijri" dir="auto">${esc(I18n.t('hijri.label'))}: ${esc(h)}</div>` : ''}</div></div>`;
   }
   function sec(title, rows) { const r = rows.join(''); return r ? `<div class="p-sec"><h5>${title}</h5>${r}</div>` : ''; }
   function relBtns(list) { return list.map(p => `<button data-goto="${esc(p.id)}">${esc(p.nick ? p.nick + ' – ' : '')}${esc(dispName(p))}</button>`).join(''); }
@@ -1146,7 +1143,7 @@
     // lookup below can swap the text in through textContent (which escapes it for us).
     if (p.updated_at) {
       record.push('<div class="p-row"><div class="k">' + esc(I18n.t('panel.lastEdited')) + '</div>' +
-        '<div class="v" data-last-edited>' + esc(fmtWhen(p.updated_at) || '') + '</div></div>');
+        '<div class="v" data-last-edited dir="auto">' + esc(fmtWhen(p.updated_at) || '') + '</div></div>');
     }
     const body = sec(I18n.t('panel.personal'), personal) + sec(I18n.t('panel.family'), family) + sec(I18n.t('panel.passing'), passing);
 
@@ -1166,10 +1163,16 @@
     const isEditor = !!(Auth && Auth.isActiveEditor());
     const canRequestDeletion = isEditor && canEdit && !p.is_deleted;
     const showHistory = !!(Auth && Auth.client) && (canEdit || isAdmin);
+    // The three "add" choices live in the panel body now, next to the person they
+    // attach to. The bar keeps the everyday actions: edit first, admin work after.
+    const addBlock = canEdit ? `
+      <div class="p-add">
+        <h5 data-i18n>panel.addRelative</h5>
+        <div class="p-add-list">${relChoices(p, false)}</div>
+      </div>` : '';
     const actionBar = (canEdit || isAdmin) ? `
       <div class="p-actions">
-        ${canEdit ? `<button class="btn" id="btnAddChild" data-i18n>panel.addChild</button>` : ''}
-        ${canEdit ? `<button class="btn" id="btnEdit" data-i18n>panel.edit</button>` : ''}
+        ${canEdit ? `<button class="btn primary" id="btnEdit" data-i18n>panel.edit</button>` : ''}
         ${isAdmin ? `<button class="btn ghost" id="btnAddRoot" data-i18n>panel.addRoot</button>` : ''}
         ${canRequestDeletion ? `<button class="btn" id="btnRequestDeletion" data-i18n>panel.requestDeletion</button>` : ''}
         ${isAdmin ? (p.is_deleted
@@ -1211,6 +1214,7 @@
           ${p.dod ? '<span class="tag gray">' + esc(I18n.t('panel.deceased')) + '</span>' : ''}${kids.length ? `<span class="tag gray">${esc(I18n.fmt('panel.children', { n: kids.length }))}</span>` : ''}
           ${p.is_deleted ? '<span class="tag gray">' + esc(I18n.t('panel.deleted')) + '</span>' : ''}${p.legacy_id ? `<span class="tag gray">${esc(I18n.fmt('panel.legacy', { id: p.legacy_id }))}</span>` : ''}</div>
       </div>
+      ${addBlock}
       ${photoSec}
       ${body.trim() ? body : '<div class="p-none">' + esc(I18n.t('panel.noDetails')) + '</div>'}
       ${rel ? `<div class="p-sec"><h5>${esc(I18n.t('panel.relatives'))}</h5>${rel}</div>` : ''}
@@ -1228,7 +1232,16 @@
     const av = $('.p-avatar', pn); const g = gcls(p);
     av.style.background = `var(--${g}-soft)`; av.style.color = `var(--${g})`;
     pn.querySelectorAll('[data-goto]').forEach(b => b.onclick = () => select(b.dataset.goto, { focus: true }));
-    if (canEdit) $('#btnAddChild', pn).onclick = () => startAddChild(p);
+    if (canEdit) {
+      pn.querySelectorAll('.p-add [data-kind]').forEach(b => {
+        b.onclick = () => {
+          const kind = b.dataset.kind;
+          if (kind === 'child') startAddChild(p);
+          else if (kind === 'spouse') startAddSpousePerson(p);
+          else if (kind === 'sibling') startAddSibling(p);
+        };
+      });
+    }
     if (canEdit) $('#btnEdit', pn).onclick = () => startEditing(p);
     if (isAdmin) $('#btnAddRoot', pn).onclick = () => startAddRoot();
     if (canRequestDeletion) $('#btnRequestDeletion', pn).onclick = () => startDeletionRequest(p);
@@ -1444,6 +1457,38 @@
   function closeRelMenu() {
     if (relMenu) { relMenu.remove(); relMenu = null; }
   }
+  // The three ways to attach a person to this one, written once so the tree menu
+  // and the panel can never drift apart. A choice that cannot work stays on the
+  // list with its reason instead of disappearing.
+  function relChoices(p, asMenu) {
+    const n = dispName(p);
+    const parent = p.parent && S.byId.has(p.parent.id) ? p.parent : null;
+    const role = asMenu ? ' role="menuitem"' : '';
+    return `<button type="button" class="rel-choice" data-kind="child"${role}>
+        <span class="rm-k"><i aria-hidden="true">＋</i>${esc(I18n.t('scope.menuChild'))}</span>
+        <span class="rm-s">${esc(I18n.fmt('scope.menuChildHint', { name: n }))}</span>
+      </button>` +
+      (p.spouse
+        ? `<button type="button" class="rel-choice"${role} disabled>
+            <span class="rm-k"><i aria-hidden="true">♥</i>${esc(I18n.t('scope.menuSpouse'))}</span>
+            <span class="rm-s">${esc(I18n.fmt('scope.menuSpouseTaken', { name: p.spouse }))}</span>
+          </button>`
+        : `<button type="button" class="rel-choice" data-kind="spouse"${role}>
+            <span class="rm-k"><i aria-hidden="true">♥</i>${esc(I18n.t('scope.menuSpouse'))}</span>
+            <span class="rm-s">${esc(I18n.fmt('scope.menuSpouseHint', { name: n }))}</span>
+          </button>`) +
+      '<div class="rm-sep" aria-hidden="true"></div>' +
+      (parent
+        ? `<button type="button" class="rel-choice" data-kind="sibling"${role}>
+            <span class="rm-k"><i aria-hidden="true">⇄</i>${esc(I18n.t('scope.menuSibling'))}</span>
+            <span class="rm-s">${esc(I18n.fmt('scope.menuSiblingHint', { name: dispName(parent) }))}</span>
+          </button>`
+        : `<button type="button" class="rel-choice"${role} disabled>
+            <span class="rm-k"><i aria-hidden="true">⇄</i>${esc(I18n.t('scope.menuSibling'))}</span>
+            <span class="rm-s">${esc(I18n.t('scope.menuSiblingNeedsParent'))}</span>
+          </button>`);
+  }
+
   function openRelMenu(id) {
     closeRelMenu();
     const p = S.byId.get(id);
@@ -1451,21 +1496,11 @@
     const btn = $(`#world .node[data-id="${CSS.escape(id)}"]:not(.spouse) [data-relmenu]`);
     if (!btn) return;
     const n = dispName(p);
-    const parent = p.parent && S.byId.has(p.parent.id) ? p.parent : null;
     relMenu = document.createElement('div');
     relMenu.className = 'rel-menu';
     relMenu.setAttribute('role', 'menu');
     relMenu.setAttribute('aria-label', I18n.fmt('scope.menuHead', { name: n }));
-    relMenu.innerHTML =
-      `<div class="rm-head">${esc(I18n.fmt('scope.menuHead', { name: n }))}</div>` +
-      `<button type="button" role="menuitem" data-kind="child"><span class="rm-k"><i>＋</i> ${esc(I18n.t('scope.menuChild'))}</span><span class="rm-s">${esc(I18n.fmt('scope.menuChildHint', { name: n }))}</span></button>` +
-      (p.spouse
-        ? `<button type="button" role="menuitem" disabled><span class="rm-k"><i>♥</i> ${esc(I18n.t('scope.menuSpouse'))}</span><span class="rm-s">${esc(I18n.fmt('scope.menuSpouseTaken', { name: p.spouse }))}</span></button>`
-        : `<button type="button" role="menuitem" data-kind="spouse"><span class="rm-k"><i>♥</i> ${esc(I18n.t('scope.menuSpouse'))}</span><span class="rm-s">${esc(I18n.fmt('scope.menuSpouseHint', { name: n }))}</span></button>`) +
-      '<div class="rm-sep"></div>' +
-      (parent
-        ? `<button type="button" role="menuitem" data-kind="sibling"><span class="rm-k"><i>⇄</i> ${esc(I18n.t('scope.menuSibling'))}</span><span class="rm-s">${esc(I18n.fmt('scope.menuSiblingHint', { name: dispName(parent) }))}</span></button>`
-        : `<button type="button" role="menuitem" disabled><span class="rm-k"><i>⇄</i> ${esc(I18n.t('scope.menuSibling'))}</span><span class="rm-s">${esc(I18n.t('scope.menuSiblingNeedsParent'))}</span></button>`);
+    relMenu.innerHTML = `<div class="rm-head">${esc(I18n.fmt('scope.menuHead', { name: n }))}</div>` + relChoices(p, true);
     relMenu.addEventListener('click', e => {
       const b = e.target.closest('[data-kind]');
       if (!b) return;
