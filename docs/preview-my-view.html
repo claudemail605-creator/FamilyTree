@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My view — preview</title>
+<!-- The real stylesheet. Nothing in this file ships; it is a design preview. -->
+<link rel="stylesheet" href="../css/style.css">
+<style>
+  /* ---------- preview chrome (not part of the product) ---------- */
+  html, body { margin: 0; }
+  /* style.css makes body a flex row for the app shell; this page is a document. */
+  body { display: block; background: var(--bg); color: var(--ink); font-family: var(--font-ui); }
+  .pv-wrap { width: 100%; max-width: 1460px; margin: 0 auto; padding: 22px 24px 48px; box-sizing: border-box; }
+  .pv-title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 0 0 4px; }
+  .pv-title h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+  .pv-title span { font-size: 12px; color: var(--ink-3); }
+  .pv-lede { margin: 0 0 18px; font-size: 13px; color: var(--ink-2); max-width: 78ch; line-height: 1.55; }
+  .pv-switch { display: flex; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
+  .pv-switch .btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+  /* the branch header strip: new */
+  .scope-bar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 10px 14px; margin: 0 0 12px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-m);
+    box-shadow: var(--sk-1);
+  }
+  .scope-bar .who { font-weight: 600; font-size: 13.5px; }
+  .scope-bar .who b { font-weight: 700; }
+  .scope-bar .sub { font-size: 12px; color: var(--ink-3); }
+  .scope-bar .grow { flex: 1 1 auto; }
+  .scope-bar .pill {
+    font-size: 11px; padding: 3px 9px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent); font-weight: 600;
+  }
+
+  .pv-stage {
+    position: relative; height: 660px; overflow: hidden;
+    border: 1px solid var(--line); border-radius: var(--r-l);
+    box-shadow: var(--sk-1);
+  }
+  .pv-legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 12px 2px 0; font-size: 12px; color: var(--ink-3); }
+  .pv-legend b { color: var(--ink-2); font-weight: 600; }
+  .pv-legend i.sw { display: inline-block; width: 22px; height: 14px; border-radius: 4px; vertical-align: -2px;
+    border: 1px solid var(--line); background: var(--surface); border-inline-start: 3px solid var(--male); }
+  .pv-legend i.sw.ctx { border-style: dashed; border-inline-start-color: var(--line-2); opacity: .6; }
+  .pv-legend i.sw.me { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .pv-note { margin: 14px 2px 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; max-width: 92ch; }
+  .pv-note b { color: var(--ink); }
+  .pv-note code { font-family: var(--font-num); font-size: 11.5px; background: var(--surface-3); padding: 1px 5px; border-radius: 4px; }
+
+  /* ---------- the two new pieces, shown as they would be built ---------- */
+  .node.me { outline: 2px solid var(--accent); outline-offset: 3px; }
+  /* Read-only context reads as "not yours to edit" without becoming unreadable. */
+  .pv-stage .node.context { opacity: .72; }
+  /* In My view the add button must be findable without hovering: that was the complaint. */
+  .pv-stage .add-kid { opacity: .55; }
+  .pv-stage .node:hover .add-kid, .pv-stage .node.selected .add-kid { opacity: 1; }
+  .me-badge {
+    position: absolute; top: -10px; left: 9px;
+    font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 999px;
+    background: var(--accent); color: var(--accent-ink);
+  }
+  .node.me .avatar { box-shadow: 0 0 0 2px var(--accent-soft) inset; }
+
+  /* one ＋ stays, it now opens a menu that names the relationship */
+  .rel-menu {
+    position: absolute; z-index: 40; width: 244px;
+    background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-m);
+    box-shadow: var(--sk-2); padding: 5px;
+    animation: relIn .12s ease-out;
+  }
+  @keyframes relIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  .rel-menu .rm-head {
+    font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--ink-3); padding: 4px 8px 6px;
+  }
+  .rel-menu button {
+    display: block; width: 100%; text-align: start; border: 0; background: none;
+    padding: 7px 8px; border-radius: var(--r-s); cursor: pointer; font: inherit; color: var(--ink);
+  }
+  .rel-menu button:hover:not(:disabled) { background: var(--accent-soft); }
+  .rel-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .rel-menu button:disabled { opacity: .45; cursor: not-allowed; }
+  .rel-menu .rm-k { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+  .rel-menu .rm-k i { font-style: normal; width: 16px; text-align: center; color: var(--ink-3); }
+  .rel-menu .rm-s { display: block; font-size: 11px; color: var(--ink-3); margin: 1px 0 0 23px; }
+  .rel-menu .rm-sep { height: 1px; background: var(--line); margin: 4px 8px; }
+</style>
+</head>
+<body>
+<div class="pv-wrap">
+
+  <div class="pv-title">
+    <h1>My view — preview</h1>
+    <span>static mockup · real <code>css/style.css</code> · real card markup</span>
+  </div>
+  <p class="pv-lede">
+    What an invited editor sees instead of the completeness tiles. It is the same tree, scoped to
+    their branch and centred on them, so the add buttons sit on the person they attach to and the
+    result lands in the same place the main tree shows.
+  </p>
+
+  <div class="pv-switch" id="sw">
+    <button class="btn" data-set="family">Editor with parents, siblings and children</button>
+    <button class="btn" data-set="solo">Editor with nobody else recorded</button>
+  </div>
+
+  <div id="scopeBar"></div>
+  <div class="stage pv-stage" id="treeView"><div class="world" id="world"></div></div>
+  <div class="pv-legend">
+    <span><i class="sw"></i> <b>solid</b> — you can edit</span>
+    <span><i class="sw ctx"></i> <b>dashed</b> — read-only context (your father, your brothers and sisters)</span>
+    <span><i class="sw me"></i> <b>ringed</b> — this is you</span>
+  </div>
+  <p class="pv-note" id="note"></p>
+</div>
+
+<script>
+(() => {
+  const NW = 180, NH = 72, GX = 16, GY = 66, PAD = 90, SG = 26;
+  const stage = document.getElementById('treeView');
+  const world = document.getElementById('world');
+
+  const SETS = {
+    family: {
+      me: 'p2',
+      openOn: 'p4',
+      note:
+        '<b>What is deliberately not drawn:</b> your cousin <b>Syed Omar</b> (son of your brother Syed Hamza) ' +
+        'exists in the family data but sits outside your branch, so he is absent rather than shown as a loose card. ' +
+        'A brother’s wife <i>is</i> drawn, as context beside him. ' +
+        '<b>What is missing on purpose:</b> none of the dashed cards carry a ＋ — you cannot edit your father or your ' +
+        'siblings, so the UI does not offer what the database would refuse.',
+      people: [
+        { id: 'p1', name: 'Syed Ahmed Senior', gender: 'Male', parent: null, spouse: 'Fatima Begum' },
+        { id: 'p2', name: 'Syed Bilal', gender: 'Male', parent: 'p1', spouse: 'Ayesha Noor' },
+        { id: 'p3', name: 'Syeda Zainab', gender: 'Female', parent: 'p1' },
+        { id: 'p5', name: 'Syed Hamza', gender: 'Male', parent: 'p1', spouse: 'Sana Hamza' },
+        { id: 'p4', name: 'Syed Yusuf', gender: 'Male', parent: 'p2' },
+        { id: 'p6', name: 'Syeda Mariam', gender: 'Female', parent: 'p2' },
+        { id: 'p7', name: 'Syed Ibrahim', gender: 'Male', parent: 'p4' },
+        { id: 'p8', name: 'Syed Omar', gender: 'Male', parent: 'p5' }
+      ]
+    },
+    solo: {
+      me: 'p9',
+      note:
+        '<b>This is the case you described.</b> No spouse, no children, no parent on record — so the view is one card ' +
+        'and an invitation. The menu explains that a brother or sister needs a parent before it can exist, rather than ' +
+        'hiding the option and leaving them to wonder.',
+      people: [
+        { id: 'p9', name: 'Syeda Ayesha', gender: 'Female', parent: null }
+      ]
+    }
+  };
+
+  const gcls = p => /^m/i.test(p.gender || '') ? 'male' : /^f/i.test(p.gender || '') ? 'female' : 'unknown';
+  const initials = n => {
+    const w = String(n).replace(/^(syed|syeda|mohammed|md|mohd)\s+/i, '').split(/\s+/).filter(Boolean);
+    return (((w[0] || '?')[0]) + (w[1] ? w[1][0] : '')).toUpperCase();
+  };
+  const unitW = p => p.spouse ? NW * 2 + SG : NW;
+  const kidsOf = (set, id) => set.filter(p => p.parent === id);
+
+  // The scope rule from the design doc: you, your descendants, your parent, and
+  // that parent's children. Spouses are NOT added — they are drawn inline from
+  // spouse_name by the card itself, and adding them would draw them twice.
+  function scopeOf(rows, meId) {
+    const byId = new Map(rows.map(p => [p.id, p]));
+    const inScope = new Set([meId]);
+    const walk = id => kidsOf(rows, id).forEach(c => { if (!inScope.has(c.id)) { inScope.add(c.id); walk(c.id); } });
+    walk(meId);
+    const me = byId.get(meId);
+    if (me && me.parent && byId.has(me.parent)) {
+      inScope.add(me.parent);
+      kidsOf(rows, me.parent).forEach(c => inScope.add(c.id));
+    }
+    return inScope;
+  }
+
+  let openFor = null;
+  let current = null;
+
+  function render(key, autoOpen) {
+    closeMenu();
+    const set = SETS[key];
+    current = key;
+    document.querySelectorAll('#sw .btn').forEach(b => b.classList.toggle('on', b.dataset.set === key));
+
+    const rows = set.people;
+    const byId = new Map(rows.map(p => [p.id, p]));
+    const inScope = scopeOf(rows, set.me);
+    const vis = rows.filter(p => inScope.has(p.id));
+    const vkids = new Map(vis.map(p => [p.id, []]));
+    const roots = [];
+    vis.forEach(p => {
+      if (p.parent && inScope.has(p.parent)) vkids.get(p.parent).push(p);
+      else roots.push(p);
+    });
+
+    const me = byId.get(set.me);
+    const parent = me.parent ? byId.get(me.parent) : null;
+
+    // ---- header strip
+    document.getElementById('scopeBar').innerHTML =
+      '<div class="scope-bar">' +
+        '<span class="pill">My view</span>' +
+        '<span class="who">Your branch<b> · ' + esc(me.name) + '</b></span>' +
+        '<span class="sub">' + (parent
+          ? 'Child of ' + esc(parent.name) + ' · ' + vis.length + ' people'
+          : vis.length === 1 ? 'Just you, so far' : vis.length + ' people') + '</span>' +
+        '<span class="grow"></span>' +
+        '<button class="btn ghost" id="btnFull">Show me in the full tree</button>' +
+      '</div>';
+
+    // ---- layout, same algorithm as renderTree()
+    const width = p => {
+      const k = vkids.get(p.id) || [];
+      const w = k.length ? Math.max(unitW(p), k.reduce((s, c) => s + width(c), 0) + GX * (k.length - 1)) : unitW(p);
+      p._w = w; return w;
+    };
+    const pos = new Map();
+    const place = (p, left) => {
+      pos.set(p.id, { x: left + p._w / 2 - unitW(p) / 2, y: p.gen * (NH + GY), w: unitW(p) });
+      const k = vkids.get(p.id) || [];
+      if (!k.length) return;
+      const total = k.reduce((s, c) => s + c._w, 0) + GX * (k.length - 1);
+      let x = left + (p._w - total) / 2;
+      k.forEach(c => { place(c, x); x += c._w + GX; });
+    };
+    const genOf = new Map();
+    const mark = (p, g) => { genOf.set(p.id, g); (vkids.get(p.id) || []).forEach(c => mark(c, g + 1)); };
+    roots.forEach(r => mark(r, 0));
+    vis.forEach(p => { p.gen = genOf.get(p.id) || 0; });
+
+    let x = 0;
+    roots.forEach(r => { width(r); place(r, x); x += r._w + GX * 2; });
+
+    let maxX = 0, maxY = 0;
+    pos.forEach((v, id) => { maxX = Math.max(maxX, v.x + v.w); maxY = Math.max(maxY, v.y + NH); });
+    const W = maxX + PAD * 2, H = maxY + PAD * 2;
+    const ox = PAD, oy = PAD;
+
+    // ---- generation bands
+    let html = '';
+    new Set([...pos.keys()].map(id => byId.get(id).gen)).forEach(g => {
+      if (g % 2) return;
+      html += '<div class="band" style="top:' + (oy + g * (NH + GY) - GY / 2) + 'px;height:' + (NH + GY) +
+        'px;width:' + W + 'px"><span>Generation ' + (g + 1) + '</span></div>';
+    });
+
+    // ---- edges
+    let edges = '';
+    pos.forEach((v, id) => {
+      (vkids.get(id) || []).forEach(c => {
+        const q = pos.get(c.id); if (!q) return;
+        const x1 = ox + v.x + v.w / 2, y1 = oy + v.y + NH, x2 = ox + q.x + q.w / 2, y2 = oy + q.y;
+        const my = y1 + (y2 - y1) / 2;
+        edges += '<path class="edge" d="M' + x1 + ',' + y1 + ' C' + x1 + ',' + my + ' ' + x2 + ',' + my + ' ' + x2 + ',' + y2 + '"/>';
+      });
+    });
+    html += '<svg width="' + W + '" height="' + H + '">' + edges + '</svg>';
+
+    // ---- cards
+    pos.forEach((v, id) => {
+      const p = byId.get(id);
+      const editable = id === set.me || isBelow(rows, id, set.me);
+      const cls = ['node', gcls(p)];
+      if (id === set.me) cls.push('me');
+      else if (!editable) cls.push('context');
+      const badge = id === set.me ? '<span class="me-badge">You</span>' : '';
+      const plus = editable
+        ? '<button type="button" class="add-kid" data-add="' + esc(p.id) + '" title="Add a relative of ' + esc(p.name) +
+          '" aria-label="Add a relative of ' + esc(p.name) + '">＋</button>'
+        : '';
+      const title = editable ? '' : ' title="Read-only: outside what you were invited to edit"';
+      html += '<div class="' + cls.join(' ') + '" data-id="' + esc(p.id) + '"' + title +
+        ' style="left:' + (ox + v.x) + 'px;top:' + (oy + v.y) + 'px;width:' + NW + 'px;height:' + NH + 'px">' +
+        badge +
+        '<div class="avatar">' + esc(initials(p.name)) + '</div>' +
+        '<div class="meta"><div class="nm">' + esc(p.name) + '</div>' +
+        (id === set.me ? '<div class="nk">this is you</div>' : '') +
+        '</div>' + plus + '</div>';
+
+      if (p.spouse) {
+        const sg = gcls(p) === 'male' ? 'female' : gcls(p) === 'female' ? 'male' : 'unknown';
+        const sx = ox + v.x + NW;
+        html += '<div class="spouse-link" style="left:' + sx + 'px;top:' + (oy + v.y + NH / 2) + 'px;width:' + SG + 'px"><i>♥</i></div>' +
+          '<div class="node spouse ' + sg + '" data-id="' + esc(p.id) + '" data-spouse="1" ' +
+          'style="left:' + (sx + SG) + 'px;top:' + (oy + v.y) + 'px;width:' + NW + 'px;height:' + NH + 'px">' +
+          '<div class="avatar">' + esc(initials(p.spouse)) + '</div>' +
+          '<div class="meta"><div class="nm">' + esc(p.spouse) + '</div>' +
+          '<div class="nk">spouse of ' + esc(p.name) + '</div></div></div>';
+      }
+    });
+
+    world.innerHTML = html;
+    world.style.width = W + 'px';
+    world.style.height = H + 'px';
+
+    // ---- fit
+    const s = Math.min(1, (stage.clientWidth - 56) / W, (stage.clientHeight - 56) / H);
+    const tx = (stage.clientWidth - W * s) / 2, ty = (stage.clientHeight - H * s) / 2;
+    world.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
+
+    document.getElementById('note').innerHTML = set.note;
+
+    // auto-open one menu so the shape is visible without hunting for it
+    openFor = set.openOn || set.me;
+    if (autoOpen !== false) requestAnimationFrame(() => openMenu(openFor));
+  }
+
+  function isBelow(rows, id, meId) {
+    let cur = rows.find(p => p.id === id);
+    while (cur && cur.parent) { if (cur.parent === meId) return true; cur = rows.find(p => p.id === cur.parent); }
+    return false;
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // ---- the menu: three named rows, with the reason when one is unavailable
+  function openMenu(id) {
+    closeMenu();
+    const set = SETS[current];
+    const rows = set.people;
+    const p = rows.find(r => r.id === id);
+    if (!p) return;
+    const el = world.querySelector('[data-id="' + id + '"] .add-kid');
+    if (!el) return;
+
+    const menu = document.createElement('div');
+    menu.className = 'rel-menu';
+    menu.setAttribute('role', 'menu');
+    const canSib = !!p.parent;
+    menu.innerHTML =
+      '<div class="rm-head">Add to ' + esc(p.name) + '</div>' +
+      '<button role="menuitem" data-kind="child"><span class="rm-k"><i>＋</i> Child</span>' +
+        '<span class="rm-s">goes under ' + esc(p.name) + '</span></button>' +
+      (p.spouse
+        ? '<button role="menuitem" disabled><span class="rm-k"><i>♥</i> Spouse</span>' +
+          '<span class="rm-s">already married to ' + esc(p.spouse) + '</span></button>'
+        : '<button role="menuitem" data-kind="spouse"><span class="rm-k"><i>♥</i> Spouse</span>' +
+          '<span class="rm-s">married to ' + esc(p.name) + '</span></button>') +
+      '<div class="rm-sep"></div>' +
+      (canSib
+        ? '<button role="menuitem" data-kind="sibling"><span class="rm-k"><i>⇄</i> Brother or sister</span>' +
+          '<span class="rm-s">child of ' + esc((rows.find(r => r.id === p.parent) || {}).name || '') + '</span></button>'
+        : '<button role="menuitem" disabled><span class="rm-k"><i>⇄</i> Brother or sister</span>' +
+          '<span class="rm-s">needs a parent on record first</span></button>');
+
+    stage.appendChild(menu);
+    const r = el.getBoundingClientRect();
+    const sr = stage.getBoundingClientRect();
+    let top = r.bottom - sr.top + 8;
+    if (top + menu.offsetHeight > stage.clientHeight - 10) top = r.top - sr.top - menu.offsetHeight - 8;
+    let left = r.right - sr.left - menu.offsetWidth;
+    left = Math.max(10, Math.min(left, stage.clientWidth - menu.offsetWidth - 10));
+    menu.style.top = top + 'px';
+    menu.style.left = left + 'px';
+    openFor = id;
+  }
+
+  function closeMenu() {
+    document.querySelectorAll('.rel-menu').forEach(m => m.remove());
+    openFor = null;
+  }
+
+  document.addEventListener('pointerdown', e => {
+    if (e.target.closest('.rel-menu') || e.target.closest('.add-kid')) return;
+    closeMenu();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
+
+  world.addEventListener('click', e => {
+    const btn = e.target.closest('.add-kid');
+    if (btn) { e.stopPropagation(); openFor === btn.dataset.add ? closeMenu() : openMenu(btn.dataset.add); }
+  });
+
+  document.getElementById('sw').addEventListener('click', e => {
+    const b = e.target.closest('[data-set]');
+    if (!b) return;
+    render(b.dataset.set, true);
+  });
+  window.addEventListener('resize', () => render(current, false));
+  document.addEventListener('click', e => {
+    if (e.target.id === 'btnFull') alert('In the app this clears the scope and centres the full tree on you.');
+  });
+
+  render('family');
+})();
+</script>
+</body>
+</html>

@@ -254,7 +254,7 @@ code, .num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
 
 /* ---------- 4. Shell ---------- */
 .layout { flex: 1; display: flex; min-height: 0; position: relative; }
-.main { flex: 1; min-width: 0; position: relative; display: flex; }
+.main { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; }
 
 .sidebar {
   width: 280px; flex: none; overflow-y: auto;
@@ -427,6 +427,78 @@ code, .num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
 .add-kid:hover { background: var(--accent); border-color: var(--accent);
   color: var(--accent-ink); transform: scale(1.08); }
 .add-kid:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- 5b. My view: scope bar, the "you" ring, the relationship menu ---------- */
+/* The bar sits above the stage inside .main (now a column). It is the only explanation
+   of what the canvas is showing, so it never scrolls or shrinks. */
+.scope-bar {
+  flex: none; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 14px; margin: 12px 14px 0;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-m);
+  box-shadow: var(--sk-1);
+}
+.scope-bar .who { font-weight: 600; font-size: 13.5px; }
+.scope-bar .who b { font-weight: 700; }
+.scope-bar .sub { font-size: 12px; color: var(--ink-3); }
+.scope-bar .grow { flex: 1 1 auto; }
+.scope-bar .scope-branches { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.scope-bar .scope-branches .btn { padding: 5px 11px; font-size: 12px; }
+.scope-bar .pill {
+  font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-weight: 600;
+}
+body.scope-mode .sidebar { display: none; }
+body.scope-mode #btnFilters { display: none !important; }
+body.scope-mode #viewSwitch { display: none; }
+
+.me-badge {
+  position: absolute; top: -9px; inset-inline-end: 10px;
+  background: var(--accent); color: var(--accent-ink);
+  font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 999px; pointer-events: none;
+}
+.node.me { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), var(--sk-2); }
+/* Context cards: the parent and the siblings. Dashed and faded so "I cannot change
+   this" is visible before the click, and no plus is drawn on them at all. */
+.node.readonly { opacity: .72; border-style: dashed; border-inline-start-style: solid; }
+.node.readonly:hover { transform: none; opacity: .85; }
+/* In My view the plus is a primary action, so it stays visible instead of appearing
+   only on hover (touch screens never hover). */
+body.scope-mode .add-kid { opacity: .55; }
+body.scope-mode .node:hover .add-kid,
+body.scope-mode .node.selected .add-kid,
+body.scope-mode .add-kid:focus-visible { opacity: 1; }
+
+.rel-menu {
+  position: absolute; z-index: 40; min-width: 244px; padding: 6px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-m); box-shadow: var(--sk-3);
+  animation: pop .14s ease-out;
+}
+.rel-menu .rm-head {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--ink-3); font-weight: 600; padding: 6px 9px 4px;
+}
+.rel-menu button {
+  display: block; width: 100%; text-align: start; padding: 7px 9px;
+  background: none; border: 0; border-radius: var(--r-s); cursor: pointer;
+}
+.rel-menu button:hover:not(:disabled) { background: var(--accent-soft); }
+.rel-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.rel-menu button:disabled { opacity: .45; cursor: not-allowed; }
+.rel-menu .rm-k { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+.rel-menu .rm-k i { font-style: normal; width: 16px; text-align: center; color: var(--ink-3); }
+.rel-menu .rm-s { display: block; font-size: 11px; color: var(--ink-3); margin: 1px 0 0 23px; }
+.rel-menu .rm-sep { height: 1px; background: var(--line); margin: 4px 8px; }
+
+/* A card saved a moment ago pulses once, so the eye finds it after the re-render
+   without the canvas jumping a second time. */
+@keyframes node-flash {
+  0%   { box-shadow: 0 0 0 0 var(--accent-soft), var(--sk-2); }
+  18%  { box-shadow: 0 0 0 7px var(--accent-soft), var(--sk-3); }
+  100% { box-shadow: 0 0 0 0 transparent, var(--sk-2); }
+}
+.node.flash { animation: node-flash 1.8s ease-out; }
 
 /* ---------- 6. Detail panel ---------- */
 .panel {
@@ -795,93 +867,6 @@ table.mini th { top: 0; }
 .stat-block h5 { margin: 0 0 8px; font-size: 10px; text-transform: uppercase;
   letter-spacing: .12em; color: var(--ink-3); font-weight: 600; }
 
-/* ---------- 14. My Family Branch workspace ---------- */
-.branch-view { flex: 1; overflow-y: auto; padding: 22px 24px 44px; }
-.branch-wrap { max-width: 880px; margin: 0 auto; }
-.branch-hero {
-  position: relative; overflow: hidden;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-xl);
-  box-shadow: var(--sk-2); padding: 26px 26px 22px;
-  animation: pop .22s ease-out;
-}
-.branch-hero::after {
-  content: ""; position: absolute; inset-inline-end: -40px; top: -40px;
-  width: 190px; height: 190px; border-radius: 50%;
-  background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
-  pointer-events: none;
-}
-.branch-hero h2 { margin: 0 0 9px; font-size: var(--font-size-xlarge); line-height: 1.25; max-width: 34ch; }
-.branch-hero p { margin: 0 0 6px; color: var(--ink-2); font-size: 14px; line-height: 1.6; max-width: 62ch; }
-.branch-anchor {
-  display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin-top: 12px; padding: 12px 18px; border-radius: var(--r-m);
-  background: var(--accent-softer); border: 1px solid var(--accent-soft); color: var(--accent);
-  font-weight: 500; font-size: 13.5px;
-}
-.branch-anchor b { font-size: var(--font-size-medium); font-weight: 600; }
-.branch-cta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 9px; }
-.branch-cta .btn.primary { padding: 11px 20px; font-size: 14px; }
-
-.branch-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px; margin: 18px 0 6px; }
-.branch-stat {
-  position: relative; overflow: hidden;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-m);
-  padding: 14px 16px; transition: border-color .18s, transform .18s, box-shadow .18s;
-}
-.branch-stat:hover { border-color: var(--line-2); transform: translateY(-2px); box-shadow: var(--sk-2); }
-.branch-stat b { display: block; font-size: 26px; line-height: 1.1; font-family: var(--font-num);
-  font-variant-numeric: tabular-nums; }
-.branch-stat span { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .1em; font-weight: 600; }
-.branch-stat .ok { color: var(--ok); }
-.branch-stat .miss { color: var(--warn); }
-.branch-bar { height: 8px; background: var(--surface-3); border-radius: 999px; overflow: hidden;
-  margin: 14px 0 4px; }
-.branch-bar-fill { height: 100%; width: 0;
-  background: linear-gradient(90deg, var(--accent), var(--g2)); border-radius: 999px;
-  transition: width .5s ease-out; }
-.branch-note { margin: 10px 0 0; padding: 12px 15px; border-radius: var(--r-m);
-  font-size: 13px; line-height: 1.5; background: var(--surface-2); color: var(--ink-2);
-  border: 1px solid var(--line); }
-.branch-toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center;
-  margin: 14px 0 4px; }
-.branch-empty { margin-top: 14px; padding: 30px 20px; text-align: center; color: var(--ink-3);
-  border: 1px dashed var(--line-2); border-radius: var(--r-xl); font-size: 14px;
-  font-family: var(--font-display); }
-
-.person-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px; margin-top: 10px; }
-.person-tile {
-  display: flex; flex-direction: column; gap: 10px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-m);
-  padding: 14px 16px; box-shadow: var(--sk-1); cursor: pointer;
-  transition: transform .18s ease-out, box-shadow .18s, border-color .18s;
-  animation: pop .2s ease-out backwards;
-  text-align: inherit; font: inherit; color: inherit;
-}
-.person-tile:hover { transform: translateY(-3px); box-shadow: var(--sk-2); border-color: var(--line-2); }
-.person-tile.done { border-inline-start: 4px solid var(--ok); }
-.person-tile.todo { border-inline-start: 4px solid var(--line-2); }
-.person-tile.highlight { outline: 2px solid var(--accent); outline-offset: 2px; }
-.person-tile .tile-head { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.person-tile .avatar { flex: none; border-radius: var(--r-m); }
-.person-tile .tile-name {
-  font-weight: 600; font-size: 14px; line-height: 1.35; min-width: 0;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.person-tile .tile-rel { font-size: 12px; color: var(--ink-3); }
-.tile-ring { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid;
-  place-items: center; font-size: 11px; font-weight: 600;
-  background: conic-gradient(var(--accent) var(--p, 0%), var(--surface-3) 0); }
-.tile-ring i { font-style: normal; width: 34px; height: 34px; border-radius: 50%;
-  display: grid; place-items: center; background: var(--surface);
-  font-family: var(--font-num); }
-.tile-missing { display: flex; flex-wrap: wrap; gap: 4px; }
-.tile-chip { font-size: 10.5px; padding: 2px 9px; border-radius: var(--r-l);
-  background: var(--warn-soft); color: var(--warn); font-weight: 600; }
-.tile-chip.ok { background: var(--ok-soft); color: var(--ok); }
-.tile-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
-.tile-actions .btn { padding: 6px 12px; font-size: 12px; }
-
 .nav-branch-mobile { display: none; width: 100%; margin: 0 0 12px; }
 @media (max-width: 640px) {
   .nav-branch-mobile[hidden] { display: none; }
@@ -1018,6 +1003,8 @@ html[dir="rtl"] .panel { --slide-from: -24px; }
   .node, .edge, .toast, .modal, .modal-card, .modal-sub-dialog, .panel, .sidebar, .gate-card {
     animation: none !important;
   }
+  /* The save confirmation must survive the blanket no-animation rule. */
+  .node.flash { outline: 2px solid var(--accent); outline-offset: 3px; }
 }
 
 /* ---------- Health check (admin) ---------- */

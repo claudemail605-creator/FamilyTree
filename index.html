@@ -41,8 +41,8 @@
       <button data-view="table" role="tab" data-i18n>view.table</button>
     </div>
 
-    <!-- My Family Branch: editors with an assigned branch (and admins, who can open
-         any of them). The workspace explains each invitation. js/branch.js shows it. -->
+    <!-- My view: editors with an assigned branch land on the scoped tree and can
+         flip back to the full one. js/branch.js owns both states. -->
     <button class="btn nav-branch" id="btnBranch" hidden>
       <span data-i18n>branch.nav</span>
     </button>
@@ -72,8 +72,8 @@
   <div class="layout">
     <aside class="sidebar" id="sidebar">
       <button class="icon-btn drawer-close only-mobile" id="btnDrawerClose" data-i18n="panel.close" data-i18n-attr="aria-label" aria-label="Close filters">✕</button>
-      <!-- Phones: the top-bar "My branch" is hidden at this width, so the workspace
-           keeps a permanent entry point at the top of the filter drawer. -->
+      <!-- Phones: the top-bar "My view" is hidden at this width, so the drawer
+           carries the same toggle. -->
       <button class="btn nav-branch-mobile" id="btnBranchMobile" hidden>
         <span data-i18n>branch.nav</span>
       </button>
@@ -142,6 +142,10 @@
     </aside>
 
     <main class="main">
+      <!-- My view: the real tree, scoped to an invited editor's branch. The bar is
+           drawn by js/branch.js and sits above the canvas, never inside the pan/zoom
+           transform. -->
+      <div id="scopeBar"></div>
       <section id="treeView" class="stage" aria-label="Family tree">
         <!-- Title + date for Print / Save as PDF (visible only when printing). -->
         <div class="print-head" id="printHead"></div>
@@ -168,10 +172,6 @@
       <section id="tableView" class="table-wrap" hidden>
         <table id="table"></table>
       </section>
-
-      <!-- My Family Branch — the guided workspace invited editors land on
-           (js/branch.js). A dedicated screen, not a filtered copy of the tree. -->
-      <section id="branchView" class="branch-view" hidden></section>
     </main>
 
     <aside class="panel" id="panel" aria-live="polite" hidden></aside>

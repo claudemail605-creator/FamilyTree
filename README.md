@@ -54,6 +54,7 @@ Run these once in Supabase → SQL Editor, in order:
 | `database/03_storage.sql` | the private `photos` bucket and its policies |
 | `database/04_seed_from_excel.sql` | the family imported from a spreadsheet, upserted by `legacy_id` — **check it is the right spreadsheet before running it** |
 | `database/04_privacy.sql` | optional: hide the exact date of birth of living people. A **proposal**, not applied — see `docs/PHASE7_SECURITY_REVIEW.md` |
+| `database/05_branch_editing.sql` | one controlled function so invited branch editors can add a child, spouse or sibling; required by My view |
 | `database/99_data_maintenance.sql` | maintenance queries: what is empty, dangling parents, duplicate names, hard-delete a test row |
 
 **Important:** the live database holds the 32-person tree starting at *Syed Mazharuddin

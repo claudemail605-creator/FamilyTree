@@ -47,6 +47,9 @@
     collapsed: new Set(),
     f: { q: '', gens: new Set(), genders: new Set(), status: '', branch: '', pob: '', qual: '', has: '' },
     view: 'tree', selected: null, sourceLabel: '',
+    // My view: when scopeAnchor is a person id the tree draws only that editor's
+    // branch (anchor + descendants + parent + parent's children). null = full tree.
+    scopeAnchor: null,
     showDeleted: false, _allRows: [], loadError: null,
     sort: { key: 'gen', dir: 1 },
     scale: 1, tx: 0, ty: 0, bbox: { w: 0, h: 0 }, pos: new Map(),
@@ -510,12 +513,52 @@
   let visible = null;   // Set of ids shown, or null for "everyone"
   let matchSet = new Set();
   let vKids = new Map(), vRoots = [];
+  let scopeIds = null;  // ids in My view, rebuilt from the current rows on every refresh
+
+  // The branch rule from docs/BRANCH_MY_VIEW.md: the anchor, the anchor's descendants,
+  // the anchor's parent, and that parent's children. Spouses are NOT added — every card
+  // draws its own spouse inline from spouse_name, and adding them here would draw the
+  // same person twice. Rebuilt from the current rows, so a child added a second ago is
+  // in the scope on the very next refresh.
+  function computeScope() {
+    scopeIds = null;
+    if (!S.scopeAnchor) return null;
+    const me = S.byId.get(S.scopeAnchor);
+    // Before the tree has loaded the anchor cannot be resolved yet — keep it and let
+    // the next refresh validate it. Once rows are here, a missing anchor means the
+    // person was deleted, so the scope must go rather than pin an empty canvas.
+    if (!me) { if (S.people.length) S.scopeAnchor = null; return null; }
+    const set = new Set([me.id]);
+    const walk = id => {
+      for (const c of S.kids.get(id) || []) {
+        if (set.has(c.id)) continue;
+        set.add(c.id); walk(c.id);
+      }
+    };
+    walk(me.id);
+    if (me.parent && S.byId.has(me.parent.id)) {
+      set.add(me.parent.id);
+      for (const c of S.kids.get(me.parent.id) || []) set.add(c.id);
+    }
+    scopeIds = set;
+    return set;
+  }
+  function scopeSet() {
+    if (!S.scopeAnchor) return null;
+    return scopeIds || computeScope();
+  }
 
   function computeVisibility() {
     matchSet = new Set(S.people.filter(matches).map(p => p.id));
-    if (!filterActive()) { visible = null; vKids = S.kids; vRoots = S.roots; return; }
-    visible = new Set(matchSet);
-    if (S.f.branch) visible.add(S.f.branch);
+    const scope = computeScope();
+    if (!scope && !filterActive()) { visible = null; vKids = S.kids; vRoots = S.roots; return; }
+    // Filters narrow the scope instead of replacing it: searching inside My view can
+    // hide a branch card, but it can never pull in someone from another branch.
+    visible = scope ? new Set(scope) : new Set(S.people.map(p => p.id));
+    if (filterActive()) {
+      for (const id of [...visible]) if (!matchSet.has(id)) visible.delete(id);
+      if (S.f.branch && !scope) visible.add(S.f.branch);
+    }
     vKids = new Map(S.people.map(p => [p.id, []])); vRoots = [];
     S.people.forEach(p => {
       if (!visible.has(p.id)) return;
@@ -526,7 +569,11 @@
   const shownKids = p => vKids.get(p.id) || [];
 
   function refresh(refit) {
+    closeRelMenu();
     computeVisibility();
+    // My view hides the global filters/stats: beside a scoped canvas they invite
+    // conclusions about the whole family that the editor cannot verify.
+    document.body.classList.toggle('scope-mode', !!S.scopeAnchor);
     renderStats();
     renderLoadError();
     if (S.view === 'tree') renderTree(refit); else renderTable();
@@ -534,6 +581,9 @@
     // Dynamic markup (stats, panel, table) carries data-i18n attributes, so re-apply
     // translations after every render.
     I18n.apply();
+    // js/branch.js owns the scope bar and cannot be called from here (it loads after
+    // this file), so it listens for this instead of polling.
+    document.dispatchEvent(new CustomEvent('ft:render'));
   }
 
   function renderStats() {
@@ -579,7 +629,7 @@
     const world = $('#world');
     const { pos, roots } = layout();
     S.pos = pos;
-    $('#emptyMsg').hidden = !(filterActive() && !matchSet.size);
+    $('#emptyMsg').hidden = !(visible && !visible.size);
     if (!pos.size) { world.innerHTML = ''; return; }
 
     let maxX = 0, maxY = 0;
@@ -588,6 +638,7 @@
     S.bbox = { w: W, h: H };
     const ox = PAD, oy = PAD;   // content offset inside the world
 
+    const scope = scopeSet();
     let html = '';
     // generation bands
     const gensUsed = new Set([...pos.keys()].map(id => S.byId.get(id).gen));
@@ -619,20 +670,38 @@
       if (S.selected === id && !S.selectedFromSpouseCard) cls.push('selected');
       if (p.is_deleted) cls.push('deleted');
       const canAdd = canEditAny && Auth.canEditPerson(id);
+      // My view: the anchor is ringed and badged; everyone the editor cannot write
+      // (the parent and the siblings) is visibly context, with no add button.
+      const readonly = !!scope && !canAdd;
+      if (readonly) cls.push('readonly');
+      if (scope && id === S.scopeAnchor) cls.push('me');
+      const roTitle = readonly ? ` title="${esc(I18n.t('scope.readOnly'))}"` : '';
       const tg = nk ? `<button class="tg" data-tg="${esc(id)}" style="left:${ox + v.x + v.w / 2}px;top:${oy + v.y + NH - 11}px" title="${esc(S.collapsed.has(id) ? I18n.t('tg.expand') : I18n.t('tg.collapse'))}">${S.collapsed.has(id) ? '+ ' + nk : '−'}</button>` : '';
-      html += `<div class="${cls.join(' ')}" data-id="${esc(id)}" style="left:${ox + v.x}px;top:${oy + v.y}px;width:${NW}px;height:${NH}px">
+      // In My view one ＋ opens a named relationship menu; in the full tree it keeps
+      // its old meaning (add a child) so admins lose nothing.
+      const addBtn = canAdd
+        ? (scope
+          ? `<button type="button" class="add-kid" data-relmenu="${esc(id)}" title="${esc(I18n.fmt('scope.addRelative', { name: dispName(p) }))}" aria-label="${esc(I18n.fmt('scope.addRelative', { name: dispName(p) }))}">＋</button>`
+          : `<button type="button" class="add-kid" data-addkid="${esc(id)}" title="${esc(I18n.t('panel.addChild'))}" aria-label="${esc(I18n.t('panel.addChild'))}">＋</button>`)
+        : '';
+      html += `<div class="${cls.join(' ')}" data-id="${esc(id)}"${roTitle} style="left:${ox + v.x}px;top:${oy + v.y}px;width:${NW}px;height:${NH}px">
+        ${scope && id === S.scopeAnchor ? `<span class="me-badge">${esc(I18n.t('scope.you'))}</span>` : ''}
         <div class="avatar">${esc(p._initials)}${p.photo_path ? `<img class="node-photo" data-card-photo="${esc(p.photo_path)}" alt="" draggable="false" hidden>` : ''}</div>
         <div class="meta"><div class="nm">${esc(dispName(p))}</div>${p.nick ? `<div class="nk">“${esc(p.nick)}”</div>` : ''}</div>
         ${(p.dod || p.is_deleted) ? `<span class="dag" title="${esc([p.dod ? I18n.t('panel.deceased') : '', p.is_deleted ? I18n.t('panel.deleted') : ''].filter(Boolean).join(' · '))}">${p.dod ? '†' : ''}${p.is_deleted ? '✕' : ''}</span>` : ''}
-        ${canAdd ? `<button type="button" class="add-kid" data-addkid="${esc(id)}" title="${esc(I18n.t('panel.addChild'))}" aria-label="${esc(I18n.t('panel.addChild'))}">＋</button>` : ''}</div>`;
+        ${addBtn}</div>`;
       if (p.spouse) {
         const sg = gcls(p) === 'male' ? 'female' : gcls(p) === 'female' ? 'male' : 'unknown';
         const sx = ox + v.x + NW;
+        // A spouse who has their own record and no visible card of their own (My view)
+        // still belongs to the card the user clicked, so highlight it here.
+        const spouseSel = p.spousePid && S.selected === p.spousePid &&
+          (S.selectedFromSpouseCard === id || !S.pos.has(p.spousePid));
         html += `<div class="spouse-link" style="left:${sx}px;top:${oy + v.y + NH / 2}px;width:${SG}px"><i>♥</i></div>
-          <div class="node spouse ${sg}${(p.spousePid && S.selected === p.spousePid && S.selectedFromSpouseCard) || (!p.spousePid && S.virtualSpouseOf && S.virtualSpouseOf === id) ? ' selected' : ''}" data-id="${esc(id)}" data-spouse="1"${p.spousePid ? ` data-spouse-pid="${esc(p.spousePid)}"` : ''} style="left:${sx + SG}px;top:${oy + v.y}px;width:${NW}px;height:${NH}px">
+          <div class="node spouse ${sg}${spouseSel || (!p.spousePid && S.virtualSpouseOf && S.virtualSpouseOf === id) ? ' selected' : ''}" data-id="${esc(id)}" data-spouse="1"${p.spousePid ? ` data-spouse-pid="${esc(p.spousePid)}"` : ''} style="left:${sx + SG}px;top:${oy + v.y}px;width:${NW}px;height:${NH}px">
           <div class="avatar">${esc(initials(p.spouse))}</div>
           <div class="meta"><div class="nm">${esc(p.spouse)}</div><div class="nk">${esc(I18n.fmt('panel.spouseOf', { name: p.nick || dispName(p) }))}</div></div>
-          ${canAdd ? `<button type="button" class="add-kid" data-addkid="${esc(id)}" title="${esc(I18n.t('panel.addChild'))}" aria-label="${esc(I18n.t('panel.addChild'))}">＋</button>` : ''}</div>`;
+          ${canAdd && !scope ? `<button type="button" class="add-kid" data-addkid="${esc(id)}" title="${esc(I18n.t('panel.addChild'))}" aria-label="${esc(I18n.t('panel.addChild'))}">＋</button>` : ''}</div>`;
       }
       html += tg;
     });
@@ -696,6 +765,7 @@
     const st = $('#treeView'), world = $('#world');
     st.addEventListener('wheel', e => {
       e.preventDefault();
+      closeRelMenu();
       const r = st.getBoundingClientRect();
       zoomAt(e.deltaY < 0 ? 1.1 : 1 / 1.1, e.clientX - r.left, e.clientY - r.top);
     }, { passive: false });
@@ -715,9 +785,10 @@
     st.addEventListener('pointerdown', e => {
       // Record every finger first; the multi-touch decision below uses `active`.
       active.set(e.pointerId, pt(e));
-      // Stage chrome (zoom buttons, legend) is clickable, not draggable: never start
-      // a pan from it, so pressing a button cannot nudge the tree by a few pixels.
-      const onChrome = !!e.target.closest('.stage-ctrls, .legend');
+      // Stage chrome (zoom buttons, legend, the relationship menu) is clickable, not
+      // draggable: never start a pan from it, so pressing a button cannot nudge the
+      // tree by a few pixels.
+      const onChrome = !!e.target.closest('.stage-ctrls, .legend, .rel-menu');
       if (active.size >= 2) {
         // A second finger down turns the drag into a pinch. Position it mid-gesture
         // so the tree does not jump when the fingers move apart.
@@ -795,6 +866,9 @@
       // A click that merely completes a pan is never an action. Consumed once, so
       // the flag can never leak into the next deliberate click.
       if (moved) { moved = false; return; }
+      // My view: the single ＋ on a card opens the named relationship menu.
+      const relBtn = e.target.closest('[data-relmenu]');
+      if (relBtn) { openRelMenu(relBtn.dataset.relmenu); return; }
       // The small + on a card adds a child to that person without selecting them.
       const addKid = e.target.closest('[data-addkid]');
       if (addKid) { const p = S.byId.get(addKid.dataset.addkid); if (p) startAddChild(p); return; }
@@ -836,6 +910,15 @@
       if (e.relatedTarget && n.contains(e.relatedTarget)) return; hideTip();
     });
     world.addEventListener('mousemove', e => { if (tipNode) moveTip(e); });
+
+    // The relationship menu is a stage-level layer: a press anywhere else closes it,
+    // Escape closes it, and a press on the ＋ that opened it toggles it shut.
+    document.addEventListener('pointerdown', e => {
+      if (!relMenu) return;
+      if (e.target.closest('.rel-menu') || e.target.closest('[data-relmenu]')) return;
+      closeRelMenu();
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRelMenu(); });
   }
 
   /* ------------------------------ Tooltip ------------------------------ */
@@ -905,12 +988,34 @@
         ? `.node.spouse[data-id="${CSS.escape(opts.virtualSpouseOf)}"]:not([data-spouse-pid])`
         : `.node[data-spouse-pid="${CSS.escape(id)}"]`)
       : `.node[data-id="${CSS.escape(id)}"]:not(.spouse)`;
-    const highlighted = $(sel);
+    let highlighted = $(sel);
+    // A linked spouse opened from the panel / after a save may have no visible card of
+    // their own (My view draws them inside the partner's slot), so highlight that card.
+    if (!highlighted && opts.card !== 'spouse') highlighted = $(`.node[data-spouse-pid="${CSS.escape(id)}"]`);
     if (highlighted) highlighted.classList.add('selected');
     renderPanel();
     if (opts.focus) focusPerson(opts.virtualSpouseOf || id, opts);
     if (S.view === 'table') document.querySelectorAll('#table tbody tr').forEach(r => r.classList.toggle('sel', r.dataset.id === id));
   }
+  // After a save the tree is rebuilt around the new person, who may land off-screen or
+  // between familiar faces. A short ring animation says "this one" without moving the
+  // canvas again (select({ focus: true }) already centred it).
+  let flashTimer = null;
+  function flash(id) {
+    const n = document.querySelector(`#world .node[data-id="${CSS.escape(id)}"]:not(.spouse)`) ||
+      document.querySelector(`#world .node[data-spouse-pid="${CSS.escape(id)}"]`);
+    if (!n) return;
+    // Restart the animation even if the same card is flashed twice in a row.
+    n.classList.remove('flash');
+    void n.offsetWidth;
+    n.classList.add('flash');
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+      document.querySelectorAll('#world .node.flash').forEach(x => x.classList.remove('flash'));
+      flashTimer = null;
+    }, 1800);
+  }
+
   // For a linked spouse card the OWNER is the person whose spousePid == the spouse id;
   // markup rebuilds use it to keep the selected class on the same card the user tapped.
   function ownerIdLookup() {
@@ -1324,6 +1429,62 @@
     if (!window.PersonForm) { toast(I18n.t('save.notConnected')); return; }
     PersonForm.open({ mode: 'addchild', parent: p });
   }
+  // My view: a brother or sister is a child of the anchor's parent. The dialog shows
+  // the fixed parent, so the editor can see where the new person will attach.
+  function startAddSibling(p) {
+    if (!window.PersonForm) { toast(I18n.t('save.notConnected')); return; }
+    if (!p.parent) { toast(I18n.t('scope.menuSiblingNeedsParent')); return; }
+    PersonForm.open({ mode: 'addsibling', person: p, parent: p.parent });
+  }
+
+  /* ---------- My view: the relationship menu (one ＋, three named actions) ---------- */
+  // A stage-level layer, not a child of the card: the card lives inside the pan/zoom
+  // transform, so a menu parented to it would scale and slide with the tree.
+  let relMenu = null;
+  function closeRelMenu() {
+    if (relMenu) { relMenu.remove(); relMenu = null; }
+  }
+  function openRelMenu(id) {
+    closeRelMenu();
+    const p = S.byId.get(id);
+    if (!p) return;
+    const btn = $(`#world .node[data-id="${CSS.escape(id)}"]:not(.spouse) [data-relmenu]`);
+    if (!btn) return;
+    const n = dispName(p);
+    const parent = p.parent && S.byId.has(p.parent.id) ? p.parent : null;
+    relMenu = document.createElement('div');
+    relMenu.className = 'rel-menu';
+    relMenu.setAttribute('role', 'menu');
+    relMenu.setAttribute('aria-label', I18n.fmt('scope.menuHead', { name: n }));
+    relMenu.innerHTML =
+      `<div class="rm-head">${esc(I18n.fmt('scope.menuHead', { name: n }))}</div>` +
+      `<button type="button" role="menuitem" data-kind="child"><span class="rm-k"><i>＋</i> ${esc(I18n.t('scope.menuChild'))}</span><span class="rm-s">${esc(I18n.fmt('scope.menuChildHint', { name: n }))}</span></button>` +
+      (p.spouse
+        ? `<button type="button" role="menuitem" disabled><span class="rm-k"><i>♥</i> ${esc(I18n.t('scope.menuSpouse'))}</span><span class="rm-s">${esc(I18n.fmt('scope.menuSpouseTaken', { name: p.spouse }))}</span></button>`
+        : `<button type="button" role="menuitem" data-kind="spouse"><span class="rm-k"><i>♥</i> ${esc(I18n.t('scope.menuSpouse'))}</span><span class="rm-s">${esc(I18n.fmt('scope.menuSpouseHint', { name: n }))}</span></button>`) +
+      '<div class="rm-sep"></div>' +
+      (parent
+        ? `<button type="button" role="menuitem" data-kind="sibling"><span class="rm-k"><i>⇄</i> ${esc(I18n.t('scope.menuSibling'))}</span><span class="rm-s">${esc(I18n.fmt('scope.menuSiblingHint', { name: dispName(parent) }))}</span></button>`
+        : `<button type="button" role="menuitem" disabled><span class="rm-k"><i>⇄</i> ${esc(I18n.t('scope.menuSibling'))}</span><span class="rm-s">${esc(I18n.t('scope.menuSiblingNeedsParent'))}</span></button>`);
+    relMenu.addEventListener('click', e => {
+      const b = e.target.closest('[data-kind]');
+      if (!b) return;
+      const kind = b.dataset.kind;
+      closeRelMenu();
+      if (kind === 'child') startAddChild(p);
+      else if (kind === 'spouse') startAddSpousePerson(p);
+      else if (kind === 'sibling') startAddSibling(p);
+    });
+    const st = $('#treeView');
+    st.appendChild(relMenu);
+    const r = btn.getBoundingClientRect(), sr = st.getBoundingClientRect();
+    let top = r.bottom - sr.top + 8;
+    if (top + relMenu.offsetHeight > st.clientHeight - 10) top = r.top - sr.top - relMenu.offsetHeight - 8;
+    let left = r.right - sr.left - relMenu.offsetWidth;
+    left = Math.max(10, Math.min(left, st.clientWidth - relMenu.offsetWidth - 10));
+    relMenu.style.top = top + 'px';
+    relMenu.style.left = Math.max(10, left) + 'px';
+  }
   // Admin only: a person with no parent, i.e. a brand new branch.
   function startAddRoot() {
     if (!(Auth && Auth.isAdmin())) return;
@@ -1581,9 +1742,23 @@
   function adminPanelOpen() { return !!(window.Admin && Admin.isOpen()); }
 
   function focusPerson(id, opts = {}) {
+    if (!S.byId.has(id)) return;
+    // My view: a linked spouse has no slot of their own — their card lives inside the
+    // partner's slot — so focusing one must not be mistaken for a filter hiding them.
+    // Anyone genuinely outside the branch is shown in the full tree instead of leaving
+    // the editor staring at a scoped canvas that cannot contain the person.
+    const scope = scopeSet();
+    let spouseCard = false;
+    if (scope && !scope.has(id)) {
+      spouseCard = S.people.some(p => p.spousePid === id && scope.has(p.id));
+      if (!spouseCard && S.scopeAnchor) {
+        setScope(null);
+        toast(I18n.t('scope.left'));
+      }
+    }
     // make sure the person is visible: expand ancestors, drop filters that hide them
     for (let c = S.byId.get(id).parent; c; c = c.parent) S.collapsed.delete(c.id);
-    if (visible && !visible.has(id)) { resetFilters();      toast(I18n.t('generic.filtersCleared')); }
+    if (visible && !visible.has(id) && !spouseCard) { resetFilters();      toast(I18n.t('generic.filtersCleared')); }
     if (S.view === 'tree') {
       computeVisibility(); renderTree(false);
       // Position: a LINKED spouse has no own slot in the layout map — their card
@@ -1611,6 +1786,40 @@
         : `.node[data-id="${CSS.escape(id)}"]:not(.spouse)`;
       const n = $(sel); if (n) { n.classList.add('selected', 'pulse'); }
     }
+  }
+
+  /* ---------- My view: scope control (js/branch.js drives this) ---------- */
+  // Anchor the canvas on one branch. Passing null returns to the full tree. The
+  // scope itself is recomputed from the current rows on every refresh, so a person
+  // added through the dialog is inside the branch on the next draw with no reload.
+  function setScope(id) {
+    S.scopeAnchor = id || null;
+    scopeIds = null;
+    S.collapsed.clear();
+    if ($('#search')) resetFiltersSilently();   // a global filter must not leak into My view
+    // My view is always the tree, never the table: the cards carry the actions.
+    S.view = 'tree';
+    const sw = $('#viewSwitch');
+    if (sw) [...sw.children].forEach(x => x.classList.toggle('on', x.dataset.view === 'tree'));
+    const tv = $('#treeView'), tab = $('#tableView');
+    if (tv) tv.hidden = false;
+    if (tab) tab.hidden = true;
+    refresh(true);
+  }
+
+  function scopeInfo() {
+    const scope = scopeSet();
+    if (!scope) return null;
+    const me = S.byId.get(S.scopeAnchor);
+    return {
+      anchorId: S.scopeAnchor,
+      anchorName: me ? dispName(me) : '',
+      parentId: me && me.parent ? me.parent.id : null,
+      parentName: me && me.parent ? dispName(me.parent) : '',
+      count: scope.size,
+      shown: visible ? visible.size : scope.size,
+      branches: Auth && Auth.branchAccess ? Auth.branchAccess.slice() : []
+    };
   }
 
   /* -------------------------------- Table -------------------------------- */
@@ -1832,6 +2041,9 @@
     if (!S.people.length && !S.sourceLabel) return;
     S.people = []; S.byId = new Map(); S.kids = new Map(); S.roots = [];
     S.pos = new Map(); S.selected = null; S.collapsed.clear(); S.sourceLabel = '';
+    S.scopeAnchor = null; scopeIds = null;
+    document.body.classList.remove('scope-mode');
+    closeRelMenu();
     S.editing = false; S.editForm = null; S.auditRows = [];
     S._allRows = []; S.showDeleted = false;
     const sd = $('#showDeleted'); if (sd) sd.checked = false;
@@ -1944,6 +2156,19 @@
     // Draw the tree from a set of rows without a round trip. The print/PNG tools use
     // it after a refresh, and the automated UI checks use it to render fixture data.
     setRows: rows => init(rows),
+    // My view surface: js/branch.js sets/clears the scope and reads the bar's facts.
+    scopeInfo: scopeInfo,
+    setScope: id => setScope(id),
+    clearScope: () => setScope(null),
+    focus: id => { if (id && S.byId.has(id)) select(id, { focus: true }); },
+    flash: id => flash(id),
+    showTree: () => {
+      S.view = 'tree';
+      const sw = $('#viewSwitch');
+      if (sw) [...sw.children].forEach(x => x.classList.toggle('on', x.dataset.view === 'tree'));
+      $('#treeView').hidden = false; $('#tableView').hidden = true;
+      refresh(true);
+    },
     clearPanel: () => closePanel(),
     exportToExcel: exportToExcel,
     reloadProfile: () => { if (Auth) { Auth._sessionFresh = false; Auth._ensureProfile(); } },
@@ -1954,7 +2179,7 @@
       if (Auth && Auth.clearPersonPaths) Auth.clearPersonPaths();
       const rows = await loadData();
       if (Array.isArray(rows)) init(rows);
-      if (id && S.byId.has(id)) select(id, { focus: true });
+      if (id && S.byId.has(id)) { select(id, { focus: true }); flash(id); }
       else if (S.selected) renderPanel();
       else renderStats();
     }

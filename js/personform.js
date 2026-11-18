@@ -136,6 +136,16 @@
     return v;
   }
 
+  // A brother or sister shares the anchor's father and mother, which are already
+  // recorded on the anchor's own row. Falling back to the parent's gender/spouse keeps
+  // the boxes useful even when the anchor row never filled them in.
+  function valuesForNewSibling(anchor, parent) {
+    const v = valuesForNewChild(parent || anchor);
+    if (anchor && anchor.father) v.fathers_name = anchor.father;
+    if (anchor && anchor.mother) v.mothers_name = anchor.mother;
+    return v;
+  }
+
   /* -------------------------------- state -------------------------------- */
   let state = null;      // { mode, person, parent, values, file, prepared, saving, parentId }
   let overlay = null;
@@ -144,12 +154,14 @@
     edit: 'panel.editTitle',
     addchild: 'panel.addChildTitle',
     addspouse: 'panel.addSpouseTitle',
+    addsibling: 'panel.addSiblingTitle',
     addroot: 'panel.addRootTitle'
   };
   const DIALOG_SUB = {
     edit: 'panel.editSub',
     addchild: 'panel.addChildSub',
     addspouse: 'panel.addSpouseSub',
+    addsibling: 'panel.addSiblingSub',
     addroot: 'panel.addRootSub'
   };
 
@@ -162,7 +174,8 @@
     const values = mode === 'edit' ? valuesFromPerson(person)
       : mode === 'addchild' ? valuesForNewChild(parent)
         : mode === 'addspouse' ? valuesForNewSpouse(person)
-          : valuesFromPerson(null);
+          : mode === 'addsibling' ? valuesForNewSibling(person, parent)
+            : valuesFromPerson(null);
     state = {
       mode: mode,
       person: person,
@@ -183,8 +196,9 @@
       removePhoto: false,
       saving: false,
       parentId: mode === 'addchild' ? (parent ? parent.id : null)
-        : mode === 'edit' ? (person ? person.parentId : null)
-          : null,
+        : mode === 'addsibling' ? (parent ? parent.id : null)
+          : mode === 'edit' ? (person ? person.parentId : null)
+            : null,
       parentLabel: ''
     };
     state.parentLabel = labelForPersonId(state.parentId);
@@ -292,6 +306,14 @@
         '<div class="edit-hint">' + esc(T('edit.marriedToHint', { name: label })) + '</div>' +
         '</div>';
     }
+    if (state.mode === 'addsibling') {
+      const parentName = state.parent ? (FT().dispName ? FT().dispName(state.parent) : state.parent.name) : '';
+      return '<div class="edit-field" data-field="parent">' +
+        '<label class="edit-label">' + esc(T('edit.parentField')) + '</label>' +
+        '<input class="edit-input" type="text" value="' + esc(parentName) + '" readonly>' +
+        '<div class="edit-hint">' + esc(T('edit.siblingParentFixed', { name: parentName })) + '</div>' +
+        '</div>';
+    }
     if (state.mode === 'addchild') {
       return '<div class="edit-field" data-field="parent">' +
         '<label class="edit-label">' + esc(T('edit.parentField')) + '</label>' +
@@ -354,7 +376,9 @@
     const title = T(titleKey, { name: focusName });
     const sub = mode === 'edit'
       ? T(DIALOG_SUB[mode], { gen: state.person.gen, gender: FT().genderLabel ? FT().genderLabel(state.person.gender) : '' })
-      : T(DIALOG_SUB[mode]);
+      : mode === 'addsibling'
+        ? T(DIALOG_SUB[mode], { name: state.parent ? ownerLabel(state.parent) : '' })
+        : T(DIALOG_SUB[mode]);
 
     const body = SECTIONS.map(sec =>
       '<fieldset class="edit-section"><legend>' + esc(T(sec.title)) + '</legend>' +
@@ -637,35 +661,45 @@
         }
         person = FT().personById(state.person.id);
       } else {
-        // INSERT: parent_id (only addchild has one) + whitelisted columns.
-        const insert = Object.assign({}, payload);
-        insert.parent_id = state.parentId || null;
-        // Addspouse: the new row itself points back at the partner, so both sides
-        // of the marriage carry each other as spouse_name from day one.
-        if (state.mode === 'addspouse' && state.spouseOwner) {
-          insert.spouse_name = (FT().dispName ? FT().dispName(state.spouseOwner) : state.spouseOwner.name) || state.spouseOwner.name;
-        }
-        const { data, error } = await client.from('people').insert(insert).select('*').single();
-        if (error) throw error;
-        person = { id: data.id, name: data.full_name, photo_path: data.photo_path || null };
-        // Addspouse: link BOTH sides. The new row already points back at the owner
-        // (insert.spouse_name), so only the owner's side is left to patch.
-        if (state.mode === 'addspouse' && state.spouseOwner) {
-          // The value written is the NEW spouse's name — never the owner's own name.
-          // Only an empty spouse field, the same person, or the exact placeholder this
-          // dialog was opened for (state.replaceSpouseName) may be replaced: a different
-          // existing partner is kept.
-          const owner = state.spouseOwner;
-          const newSpouseName = String(payload.full_name || '').trim();
-          const existing = String(owner.spouse || '').trim();
-          const replaceable = !existing || existing === newSpouseName ||
-            (state.replaceSpouseName && existing === state.replaceSpouseName);
-          if (newSpouseName && replaceable) {
-            const { error: linkErr } = await client.from('people')
-              .update({ spouse_name: newSpouseName })
-              .eq('id', owner.id);
-            if (linkErr) console.warn('Could not link the spouse back to the owner:', linkErr.message);
+        // Create modes. Admin `addroot` keeps the direct insert (it has no anchor).
+        // Child, spouse and sibling all go through public.add_relative — the one
+        // reviewed SECURITY DEFINER path that can derive a sibling's parent and can
+        // create the top-level spouse row an editor is otherwise forbidden to write.
+        const kind = state.mode === 'addspouse' ? 'spouse'
+          : state.mode === 'addsibling' ? 'sibling'
+            : state.mode === 'addchild' ? 'child' : null;
+        if (kind) {
+          const anchor = kind === 'spouse' ? state.spouseOwner
+            : kind === 'sibling' ? state.person
+              : state.parent;
+          if (!anchor || !anchor.id) throw new Error('add_relative: no anchor');
+          const row = Object.assign({}, payload);
+          delete row.parent_id;   // derived by the function, never trusted from here
+          const { data, error } = await client.rpc('add_relative', { p_kind: kind, p_anchor: anchor.id, p_row: row });
+          if (error) throw error;
+          const created = Array.isArray(data) ? data[0] : data;
+          if (!created || !created.id) throw new Error('add_relative returned no row');
+          person = { id: created.id, name: created.full_name, photo_path: created.photo_path || null };
+          // The RPC writes the new row's side of the marriage; patch the owner's side.
+          if (kind === 'spouse') {
+            const owner = anchor;
+            const newSpouseName = String(payload.full_name || '').trim();
+            const existing = String(owner.spouse || '').trim();
+            const replaceable = !existing || existing === newSpouseName ||
+              (state.replaceSpouseName && existing === state.replaceSpouseName);
+            if (newSpouseName && replaceable) {
+              const { error: linkErr } = await client.from('people')
+                .update({ spouse_name: newSpouseName })
+                .eq('id', owner.id);
+              if (linkErr) console.warn('Could not link the spouse back to the owner:', linkErr.message);
+            }
           }
+        } else {
+          const insert = Object.assign({}, payload);
+          insert.parent_id = null;
+          const { data, error } = await client.from('people').insert(insert).select('*').single();
+          if (error) throw error;
+          person = { id: data.id, name: data.full_name, photo_path: data.photo_path || null };
         }
       }
 
@@ -692,13 +726,19 @@
       FT().toast(isEdit ? T('save.changesSaved') : T('save.added', { name: newName }));
     } catch (err) {
       const msg = (err && err.message) || String(err);
-      const friendly = /row-level security|permission|not allowed|forbids|violates|unauthoriz|403/i.test(msg)
-        ? T('save.permError')
-        : /Only an admin can move a person/.test(msg)
-          ? T('save.moveError')
-          : /duplicate key|legacy_id/.test(msg)
-            ? T('save.foreignKeyError')
-            : isEdit ? T('save.saveFailed', { msg: msg }) : T('save.addFailed', { msg: msg });
+      // The function is additive and shipped separately from the site. Until the SQL
+      // has been applied PostgREST answers PGRST202 / "schema cache"; say what it means.
+      const notEnabled = (err && err.code === 'PGRST202') ||
+        /PGRST202|Could not find the function public\.add_relative|add_relative.*schema cache/i.test(msg);
+      const friendly = notEnabled
+        ? T('save.notEnabled')
+        : /row-level security|permission|not allowed|forbids|violates|unauthoriz|403/i.test(msg)
+          ? T('save.permError')
+          : /Only an admin can move a person/.test(msg)
+            ? T('save.moveError')
+            : /duplicate key|legacy_id/.test(msg)
+              ? T('save.foreignKeyError')
+              : isEdit ? T('save.saveFailed', { msg: msg }) : T('save.addFailed', { msg: msg });
       FT().toast(friendly);
       if (state && btn) {
         state.saving = false;
